@@ -1,0 +1,6 @@
+# 运行时依赖(免安装 exe 用户不需要装)
+pywin32>=306
+pillow>=10.0
+numpy>=1.24
+# 打包用
+pyinstaller>=6.0
