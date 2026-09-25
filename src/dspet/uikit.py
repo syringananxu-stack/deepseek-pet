@@ -95,6 +95,19 @@ class Layer(object):
         self.d.ellipse(self._b(box), fill=fill, outline=outline,
                        width=max(1, int(width * SS)))
 
+    def circle(self, cx, cy, r, fill=None, outline=None, width=0.6):
+        """按圆心+半径画圆(上下左右完全对称,不会偏心)"""
+        x, y, rr = (self.pad + cx) * SS, (self.pad + cy) * SS, r * SS
+        self.d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=fill, outline=outline,
+                       width=max(1, int(width * SS)))
+
+    def shadow_circle(self, cx, cy, r, blur=1.0, alpha=0.28, dy=0.0, dx=0.0):
+        lay = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(lay)
+        x, y, rr = (self.pad + cx + dx) * SS, (self.pad + cy + dy) * SS, r * SS
+        d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=(0, 0, 0, int(alpha * 255)))
+        self.im.alpha_composite(lay.filter(ImageFilter.GaussianBlur(blur * SS)))
+
     def shadow(self, box, radius, blur=2.0, dy=0.5, dx=0.0, alpha=0.30):
         lay = Image.new("RGBA", self.im.size, (0, 0, 0, 0))
         d = ImageDraw.Draw(lay)
@@ -193,25 +206,28 @@ def switch_frames(on=GREEN, off=TRACK_OFF, w=SWITCH_W, h=SWITCH_H, inset=KNOB_IN
     key = ("sw", W, H, on, off, ins)
     if key in _cache:
         return _cache[key]
-    dk_ = H - 2 * ins          # 旋钮直径
+    dk_ = H - 2 * ins - 1      # 旋钮直径(比轨道内高再小 1px,留出描边的呼吸位)
     travel = max(1, W - 2 * ins - dk_)
+    rr = (H - 1) / 2.0         # 轨道的"胶囊"半径
+    cy = H / 2.0               # 垂直中线(旋钮和轨道共用,保证同心)
+    kr = dk_ / 2.0 - 0.3       # 旋钮半径
     frames = []
     for i in range(travel + 1):
         t = i / float(travel)
         track = mix(off, on, t)
         L = Layer(W, H)
-        L.rrect((0, 0, W - 1, H - 1), (H - 1) / 2.0, fill=rgb(track) + (255,),
-                outline=None)
+        # 轨道:灰描边(0.5px,很淡)让"凹槽"有轮廓
+        L.rrect((0.5, 0.5, W - 0.5, H - 0.5), rr, fill=rgb(track) + (255,),
+                outline=(0, 0, 0, 34), width=0.5)
         # 凹槽感:顶部淡淡的内阴影 + 底部一丝高光
-        L.shadow((0.5, 0.5, W - 0.5, H * 0.55), (H - 1) / 2.0, blur=1.5, dy=0.3,
-                 alpha=0.16)
-        L.rrect((1.2, H - 1.8, W - 1.2, H - 0.7), (H - 1) / 2.0,
-                fill=(255, 255, 255, 26))
+        L.shadow((0.5, 0.5, W - 0.5, H * 0.55), rr, blur=1.5, dy=0.3, alpha=0.15)
+        L.rrect((1.2, H - 1.8, W - 1.2, H - 0.7), rr, fill=(255, 255, 255, 24))
         kx = ins + int(round(t * travel))
-        L.shadow((kx, ins, kx + dk_, ins + dk_), dk_ / 2.0, blur=1.1, dy=0.6,
-                 alpha=0.30)
-        L.ellipse((kx, ins, kx + dk_, ins + dk_), fill=(255, 255, 255, 255),
-                  outline=(0, 0, 0, 18), width=0.5)
+        cx = kx + dk_ / 2.0
+        # 旋钮:轻投影(往下 0.35px,别压太重,免得看着"陷进去")+ 灰描边白块
+        L.shadow_circle(cx, cy + 0.4, kr, blur=0.9, alpha=0.26)
+        L.circle(cx, cy, kr, fill=(255, 255, 255, 255), outline=(0, 0, 0, 30),
+                 width=0.6)
         frames.append(L.out())
     _cache[key] = (frames, W + 2 * PAD, H + 2 * PAD)
     return _cache[key]
