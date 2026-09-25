@@ -933,6 +933,33 @@ class Pet(object):
         from . import settings_ui
         self._settings_th = settings_ui.open_settings(self.cfg, on_close=_done)
 
+    def _quit(self):
+        """退出桌宠 —— 必须"一定退得掉":
+        ⚠️ 以前是 `self._save_cfg(); win32gui.DestroyWindow(...)`:存配置只要抛一次异常
+        (配置目录只读/文件被占/tkinter 守护线程在退出时卡住),窗口就永远不销毁 →
+        用户看到的是"关不掉 → 进程还在 → 再启动没反应 → exe 也删不掉"。"""
+        try:
+            self._save_cfg()
+        except Exception:
+            pass
+        try:
+            win32gui.DestroyWindow(self.hwnd)
+        except Exception:
+            pass
+
+        def _hard():
+            time.sleep(1.2)
+            os._exit(0)                     # 兜底:跳过解释器收尾,直接结束进程
+
+        try:
+            threading.Thread(target=_hard, daemon=True).start()
+        except Exception:
+            pass
+        try:
+            win32gui.PostQuitMessage(0)
+        except Exception:
+            pass
+
     # ---------- 菜单 ----------
     def _menu(self):
         """右键只留两件事:开设置 / 退出(其余设置都进 UI 了)"""
@@ -948,8 +975,7 @@ class Pet(object):
         if cmd == 20:
             self.open_settings()
         elif cmd == 3:
-            self._save_cfg()
-            win32gui.DestroyWindow(self.hwnd)
+            self._quit()
         if cmd:
             self._go_calm(CALM_AFTER)      # 菜单操作也算"被打扰"
 
@@ -1013,12 +1039,13 @@ class Pet(object):
                 self.sqv += 0.02
                 self._go_calm(CALM_AFTER_DRAG)      # 被抓住过 → 老实很长一段时间
             elif not self.key:
-                self.override_txt = "还没填 API Key 呢,笨蛋。右键→设置。"
+                # ⚠️ 以前这里会自动弹设置窗 → 没填 Key 时"点一下就跳 UI",东家明确不要。
+                #    改成只在气泡里说一句,设置入口始终只有"右键 → 打开设置界面"。
+                self.override_txt = "还没填 API Key 呢 —— 右键我 → 打开设置界面"
                 self.override_until = time.time() + OVERRIDE_SECONDS
                 self._go_calm(CALM_AFTER)
                 self._bounce(1.0, pop=True)
                 self._redraw()
-                self.open_settings()
             else:
                 self.info_until = time.time() + INFO_SECONDS
                 self._go_calm(CALM_AFTER)
@@ -1032,6 +1059,9 @@ class Pet(object):
         if msg == win32con.WM_DESTROY:
             win32gui.PostQuitMessage(0)
             return 0
+        if msg == win32con.WM_CLOSE:
+            self._quit()                    # 走同一个"保证退得掉"的路径
+            return 0
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     def start(self):
@@ -1042,6 +1072,9 @@ class Pet(object):
         if not self.cfg.get("first_run_done"):
             self.cfg["first_run_done"] = True
             self._save_cfg()
-            win32gui.PostMessage(self.hwnd, WM_APP_RELOAD + 1, 0, 0)   # 首次运行:稍后弹设置
+            # 首次运行不再自动弹设置窗(东家:点一下就跳 UI 不是他要的),
+            # 只用气泡提一句怎么进设置
+            self.override_txt = "第一次见面～ 右键我 → 打开设置界面,填上 Key 就能看余额"
+            self.override_until = time.time() + OVERRIDE_SECONDS * 3
         self._dbg("start v%s" % VERSION)
         win32gui.PumpMessages()
