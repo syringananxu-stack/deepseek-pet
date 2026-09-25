@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""设置窗口 —— macOS 风格自制 UI(customtkinter + 自绘控件)
+"""设置窗口 —— 自制精致 UI(customtkinter + PIL 自绘控件)
 
 设计要点
-  * 去系统边框(overrideredirect)+ 圆角(Win11 走 DWM,Win10 用窗口区域裁剪兜底)
-  * 自制标题栏(红黄绿三点,可拖动)
-  * 卡片分组,无边框白卡 + 发丝分隔线
+  * **正经 Windows 窗口**:用系统标题栏/边框(能拖、能最小化、能关),**不置顶**
+    —— 只有桌宠置顶;设置窗是普通窗口,该被盖住就被盖住。
+  * 标题栏染成跟内容一致的颜色(Win11 的 DWMWA_CAPTION_COLOR;Win10 忽略也不难看)
+  * 卡片分组,无边框白卡 + 底部柔和投影
   * 全部控件由 PIL 超采样渲染(见 uikit.py):左右滑块开关 / 滑动条 / 分段控件 /
     输入框 / 按钮 —— 边缘丝滑、带真实柔和阴影,不再是 tkinter 手绘的锯齿货
   * 打开/关闭:淡入 + 上滑动画;开关有滑动动画;按钮有 hover/press
@@ -13,16 +14,15 @@
 
 数据流:打开读 config → 用户改 → 保存写盘 + 回调通知桌宠主线程重载。
 """
-import os
 import threading
 import tkinter as tk
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
 from . import APP_TITLE, VERSION, autostart, balance, config
 from . import uikit as ui
-from .paths import config_path, resource_path
+from .paths import config_path
 from .uikit import (ACCENT, BG, BORDER, CARD, DANGER, FAINT, GREEN, LINE, SOFT,
                     SUB, TEXT)
 
@@ -60,56 +60,6 @@ def _animate(win, x, y, alpha_to, slide_from=None, steps=14, delay=12, on_done=N
             on_done()
 
     step(1)
-
-
-# ---------------- 标题栏 ----------------
-class TitleBar(ctk.CTkFrame):
-    def __init__(self, master, win):
-        super().__init__(master, fg_color="transparent", height=50, corner_radius=0)
-        self.win = win
-        self.pack_propagate(False)
-
-        dots = ctk.CTkFrame(self, fg_color="transparent")
-        dots.pack(side="left", padx=(16, 0))
-        ui.Dot(dots, 13, ui.TL_CLOSE, bg=BG, command=win._close_anim).pack(side="left")
-        for c, cmd in ((ui.TL_MIN, self._minimize), (ui.TL_ZOOM, lambda: None)):
-            ui.Dot(dots, 13, c, bg=BG, command=cmd).pack(side="left", padx=(8, 0))
-
-        center = ctk.CTkFrame(self, fg_color="transparent")
-        center.pack(side="left", expand=True)
-        try:
-            ico = Image.open(resource_path("DSniang1.png")).convert("RGBA")
-            w0, h0 = ico.size
-            ico = ico.crop((int(w0 * .19), int(h0 * .23), int(w0 * .61), int(h0 * .65)))
-            ico = ico.resize((24, 24), Image.LANCZOS)
-            mask = Image.new("L", (24, 24), 0)
-            from PIL import ImageDraw
-            ImageDraw.Draw(mask).ellipse((0, 0, 23, 23), fill=255)
-            ico.putalpha(mask)
-            self._ico = ctk.CTkImage(light_image=ico, size=(24, 24))
-            ctk.CTkLabel(center, image=self._ico, text="").pack(side="left", padx=(0, 8))
-        except Exception:
-            self._ico = None
-        ctk.CTkLabel(center, text="设置", font=_font(13.5, True),
-                     text_color=TEXT).pack(side="left")
-        ctk.CTkFrame(self, fg_color="transparent", width=88, height=1).pack(side="right")
-
-        for widget in (self, dots, center):
-            widget.bind("<Button-1>", self._press)
-            widget.bind("<B1-Motion>", self._drag)
-
-    def _press(self, e):
-        self._dx, self._dy = e.x_root - self.win.winfo_x(), e.y_root - self.win.winfo_y()
-
-    def _drag(self, e):
-        self.win.geometry("+%d+%d" % (e.x_root - self._dx, e.y_root - self._dy))
-
-    def _minimize(self):
-        try:
-            self.win.overrideredirect(False)
-            self.win.iconify()
-        except Exception:
-            pass
 
 
 # ---------------- 卡片 ----------------
@@ -167,11 +117,12 @@ class SettingsWindow(object):
 
         ctk.set_appearance_mode("light")
         self.root = ctk.CTk()
-        self.root.title("%s · 设置" % APP_TITLE)
-        self.root.overrideredirect(True)
+        self.root.title("设置 — %s" % APP_TITLE)
+        # ⚠️ 正经 Windows 窗口:系统标题栏(能拖、能最小化、能关),**不置顶**
+        self.root.resizable(False, False)
         self.root.attributes("-alpha", 0.0)
-        self.root.attributes("-topmost", True)
         self.root.configure(fg_color=BG)
+        self.root.protocol("WM_DELETE_WINDOW", self._close_anim)
 
         try:
             self.sc = max(1.0, min(2.0, float(self.root.winfo_fpixels("1i")) / 96.0))
@@ -183,13 +134,9 @@ class SettingsWindow(object):
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        wa_h = sh - 70
+        wa_h = sh - 120
         self._x = max(8, (sw - W) // 2)
         self.root.geometry("%dx%d+%d+%d" % (W, 600, self._x, 0))
-
-        self._titlebar = TitleBar(self._shell, self)
-        self._titlebar.pack(fill="x")
-        ui.hairline(self._shell, "#DFE0E6").pack(fill="x")
 
         self.compact = False
         body = self._body_parent()
@@ -208,7 +155,7 @@ class SettingsWindow(object):
         self._y = max(12, (sh - self.h) // 2 - 26)
         self.root.geometry("%dx%d+%d+%d" % (W, self.h, self._x, self._y))
         self.root.update_idletasks()
-        self._round_corners()
+        self._style_titlebar()
         self._bind_keys()
 
     # ---------- 布局 ----------
@@ -225,7 +172,7 @@ class SettingsWindow(object):
 
     def _build_body(self, body=None):
         body = body if body is not None else self._body_parent()
-        ctk.CTkFrame(body, fg_color="transparent", height=4).pack(fill="x")
+        ctk.CTkFrame(body, fg_color="transparent", height=12).pack(fill="x")
         self._api_card(body)
         self._behaviour_card(body)
         self._details_card(body)
@@ -354,33 +301,30 @@ class SettingsWindow(object):
                   height=34, font=_font(12), sc=self.sc).pack(side="right", padx=(0, 9))
 
     # ---------- 适配 ----------
-    def _round_corners(self):
-        """Win11 → DWM 真圆角;Win10(DWM 不支持)→ 用窗口区域裁剪兜底"""
+    def _style_titlebar(self):
+        """把 Windows 系统标题栏染成跟内容一致的颜色(Win11 生效;Win10 忽略,不影响)"""
         try:
             import ctypes
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or \
                 self.root.winfo_id()
-            pref = ctypes.c_int(2)                      # DWMWCP_ROUND
-            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
-            if hr != 0:
-                r = int(14 * self.sc)
-                rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, W + 1, self.h + 1,
-                                                             r, r)
-                ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+            # COLORREF = 0x00BBGGRR
+            for attr, val in ((35, 0x00F2EEEC),    # DWMWA_CAPTION_COLOR ← #ECEEF2
+                              (36, 0x001F1D1D)):   # DWMWA_TEXT_COLOR    ← #1D1D1F
+                c = ctypes.c_int(val)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(c),
+                                                          ctypes.sizeof(c))
+            dark = ctypes.c_int(0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark),
+                                                       ctypes.sizeof(dark))
+            # 圆角(本来就是 Windows 窗口,Win11 会给;显式要一下更保险)
+            pref = ctypes.c_int(2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref),
+                                                       ctypes.sizeof(pref))
         except Exception:
             pass
 
     def _bind_keys(self):
         self.root.bind("<Escape>", lambda e: self._close_anim())
-        self.root.bind("<Map>", self._on_map)
-
-    def _on_map(self, _e=None):
-        try:
-            if not self.root.overrideredirect():
-                self.root.overrideredirect(True)
-        except Exception:
-            pass
 
     # ---------- 交互 ----------
     def _toggle_show(self):
@@ -487,13 +431,19 @@ class SettingsWindow(object):
                 pass
 
     def run(self):
-        self.root.after(30, lambda: _animate(self.root, self._x, self._y, 1.0,
-                                             slide_from=26, on_done=self._focus))
+        def _show():
+            try:
+                self.root.deiconify()
+                self.root.lift()          # 打开时提到最前
+            except Exception:
+                pass
+            _animate(self.root, self._x, self._y, 1.0, slide_from=26,
+                     on_done=self._focus)
+        self.root.after(30, _show)
         self.root.mainloop()
 
     def _focus(self):
         try:
-            self.root.focus_force()
             self.ent.entry.focus_set()
         except Exception:
             pass
