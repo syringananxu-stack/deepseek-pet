@@ -31,7 +31,7 @@ TICK_IDLE = 500
 TICK_WALK = 20
 TICK_ANIM = 20
 
-INFO_SECONDS = 5
+INFO_SECONDS = 10          # 点一下看余额/倒计时,给足时间看完(以前 5 秒,倒计时还没看明白就没了)
 OVERRIDE_SECONDS = 4
 SPEED_MIN, SPEED_MAX = 26.0, 44.0
 
@@ -264,6 +264,7 @@ class Pet(object):
         self.vx = 0.0
         self.vy = 0.0
         self._tickn = 0
+        self._last_sec = 0            # 上一次按"秒"刷气泡的时刻(倒计时每秒要走)
         self._period = 0
         self._last_move_t = 0.0
         self._pos_valid = False
@@ -732,8 +733,14 @@ class Pet(object):
             self.chat = self._pick_chat()
             self.chat_until = now + random.uniform(22, 45)
             need = True
-        if now < self.info_until and self._tickn % 20 == 0:
-            need = True
+        # ⚠️ 气泡里有"距梁文峰/梁文谷 …"倒计时,必须**每秒**重画:
+        #    以前是 `_tickn % 20 == 0`,怠速 tick 是 500ms → 10 秒才动一格,
+        #    看上去就是"点击后跑了三四秒就不动了"(那会儿弹簧动画 tick 快,才动了几下)。
+        if now < self.info_until or now < self.override_until:
+            sec = int(now)
+            if sec != self._last_sec:
+                self._last_sec = sec
+                need = True
         if need:
             self._redraw()
         if not self.dragging:
