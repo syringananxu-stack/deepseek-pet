@@ -613,11 +613,19 @@ class Entry(tk.Canvas):
                                        height=int(height * sc) - int(8 * sc))
         self.entry.bind("<FocusIn>", lambda e: self.itemconfig(self._bgid, image=self._imgs[True]))
         self.entry.bind("<FocusOut>", lambda e: self.itemconfig(self._bgid, image=self._imgs[False]))
+        self.entry.bind("<Return>", lambda e: self.on_enter())
         self.bind("<Button-1>", lambda e: self.entry.focus_set())
         self.bind("<Configure>", self._resize)
 
     def set_show(self, ch):
         self.entry.configure(show=ch)
+
+    def on_enter(self):
+        if getattr(self, "on_submit", None):
+            try:
+                self.on_submit()
+            except Exception:
+                pass
 
     def get_text(self):
         return self.var.get()

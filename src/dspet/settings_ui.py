@@ -139,6 +139,9 @@ class SettingsWindow(object):
         self.root.geometry("%dx%d+%d+%d" % (W, 600, self._x, 0))
 
         self.compact = False
+        # 底栏固定在窗口底部(两种布局都如此):保存/取消永远可见
+        self._foot_host = ctk.CTkFrame(self._shell, fg_color=BG, corner_radius=0)
+        self._foot_host.pack(side="bottom", fill="x")
         body = self._body_parent()
         self._build_body(body)
         self.root.update_idletasks()
@@ -147,7 +150,7 @@ class SettingsWindow(object):
             body.destroy()
             self.compact = True
             body = self._body_parent()
-            self._build_body(body)
+            self._build_body(body, with_footer=False)     # 底栏已经建好了,别重复
             self.root.update_idletasks()
             need = wa_h
         self.h = int(min(need, wa_h))
@@ -170,13 +173,14 @@ class SettingsWindow(object):
         f.pack(fill="both", expand=True)
         return f
 
-    def _build_body(self, body=None):
+    def _build_body(self, body=None, with_footer=True):
         body = body if body is not None else self._body_parent()
         ctk.CTkFrame(body, fg_color="transparent", height=12).pack(fill="x")
         self._api_card(body)
         self._behaviour_card(body)
         self._details_card(body)
-        self._footer(body)
+        if with_footer:
+            self._footer(self._foot_host)
         return body
 
     def _api_card(self, body):
@@ -195,6 +199,7 @@ class SettingsWindow(object):
         self.var_key = tk.StringVar(value=config.get_api_key(self.cfg))
         self.ent = ui.Entry(row, self.var_key, bg=CARD, width=300, height=36,
                             font=_font(12), show="•", sc=self.sc)
+        self.ent.on_submit = self._save            # 输入框里回车 = 保存并应用
         self.ent.pack(side="left", fill="x", expand=True)
         self._show = False
         self.btn_eye = ui.Button(row, "显示", command=self._toggle_show, bg=CARD,
