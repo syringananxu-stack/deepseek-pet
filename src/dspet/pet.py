@@ -915,7 +915,10 @@ class Pet(object):
         self._dbg("config reloaded")
 
     def open_settings(self):
-        if self._settings_open:
+        th = getattr(self, "_settings_th", None)
+        # 标志位 + 线程存活双重判断:万一设置窗是被杀掉/崩掉的(没走 on_close 回调),
+        # 也不会把"已打开"永久卡住
+        if self._settings_open and th is not None and th.is_alive():
             return
         self._settings_open = True
 
@@ -927,7 +930,7 @@ class Pet(object):
                 pass
 
         from . import settings_ui
-        settings_ui.open_settings(self.cfg, on_close=_done)
+        self._settings_th = settings_ui.open_settings(self.cfg, on_close=_done)
 
     # ---------- 菜单 ----------
     def _menu(self):

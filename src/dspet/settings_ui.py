@@ -27,15 +27,29 @@ from .uikit import (ACCENT, BG, BORDER, CARD, DANGER, FAINT, GREEN, LINE, SOFT,
                     SUB, TEXT)
 
 W, H = 580, 800
+_SESSION = {}
+_QUEUE = []
+_LOCK = threading.Lock()
 LEVEL_TEXT = ["最小", "小", "中", "大", "最大"]
 REFRESH_CHOICES = [10, 15, 30, 60, 120, 300]
+
+# 设置界面缩放:小 / 中 / 大(三档,只在设置里调)
+UI_SCALES = [0.85, 1.0, 1.18]
+UI_SCALE_TEXT = ["小", "中", "大"]
+_UIK = [1.0]                # 当前界面缩放系数(字号/间距用)
 
 Toggle = ui.Switch          # 兼容旧名字
 
 
 def _font(size=13, bold=False):
-    return ctk.CTkFont(family="Microsoft YaHei UI", size=int(round(size)),
+    return ctk.CTkFont(family="Microsoft YaHei UI",
+                       size=max(7, int(round(size * _UIK[0]))),
                        weight="bold" if bold else "normal")
+
+
+def _p(n):
+    """界面缩放后的间距/尺寸(跟随 小/中/大 档位)"""
+    return int(round(n * _UIK[0]))
 
 
 # ---------------- 窗口动画 ----------------
@@ -58,6 +72,7 @@ def _animate(win, x, y, alpha_to, slide_from=None, steps=14, delay=12, on_done=N
             win.after(delay, lambda: step(i + 1))
         elif on_done:
             on_done()
+        return
 
     step(1)
 
@@ -67,11 +82,12 @@ class Card(ctk.CTkFrame):
     """无边框白色圆角卡片 + 底下一道柔和投影 + 左上角小节标题"""
 
     def __init__(self, master, title, sc=1.0):
+        k = _UIK[0]
         holder = ctk.CTkFrame(master, fg_color="transparent")
-        holder.pack(fill="x", padx=18, pady=(0, 12))
+        holder.pack(fill="x", padx=int(round(18 * k)), pady=(0, int(round(12 * k))))
         if title:
             ctk.CTkLabel(holder, text=title, font=_font(10.5, True), text_color=SUB,
-                         anchor="w").pack(anchor="w", padx=4, pady=(0, 6))
+                         anchor="w").pack(anchor="w", padx=4, pady=(0, int(round(6 * k))))
         super().__init__(holder, fg_color=CARD, corner_radius=12, border_width=0)
         self.pack(fill="x")
         self._strip = tk.Label(holder, bd=0, highlightthickness=0, bg=BG)
@@ -96,27 +112,36 @@ class SwitchCell(ctk.CTkFrame):
     def __init__(self, master, title, desc, var, sc=1.0):
         super().__init__(master, fg_color="transparent")
         self.toggle = Toggle(self, var, bg=CARD, sc=sc)
-        self.toggle.pack(side="right", padx=(8, 0), pady=2)
+        self.toggle.pack(side="right", padx=(_p(8), 0), pady=_p(2))
         text = ctk.CTkFrame(self, fg_color="transparent")
         text.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(text, text=title, font=_font(12.5), text_color=TEXT,
                      anchor="w").pack(anchor="w")
         if desc:
             ctk.CTkLabel(text, text=desc, font=_font(10), text_color=FAINT,
-                         anchor="w").pack(anchor="w", pady=(1, 0))
+                         anchor="w").pack(anchor="w", pady=(_p(1), 0))
 
 
 # ---------------- 主窗口 ----------------
 class SettingsWindow(object):
-    def __init__(self, cfg, on_close=None):
+    def __init__(self, cfg, on_close=None, root=None):
         self.cfg = dict(cfg)
         self.on_close = on_close
         self.saved = False
         self._closing = False
+        self._hidden = False
+        self._rebuilding = False
         self.sc = 1.0
 
+        # 界面缩放(小/中/大)—— 必须在建任何控件之前设好
+        self.ui_level = max(0, min(len(UI_SCALES) - 1, int(self.cfg.get("ui_scale", 1))))
+        self.uscale = UI_SCALES[self.ui_level]
+        _UIK[0] = self.uscale
+
         ctk.set_appearance_mode("light")
-        self.root = ctk.CTk()
+        # ⚠️ root 由外面传进来(一个进程只建一次):customtkinter 的 ScalingTracker 是
+        #    单例、绑死第一个 root,destroy 之后再建新 root 必炸 → 所以关了只是隐藏
+        self.root = root if root is not None else ctk.CTk()
         self.root.title("设置 — %s" % APP_TITLE)
         # ⚠️ 正经 Windows 窗口:系统标题栏(能拖、能最小化、能关),**不置顶**
         self.root.resizable(False, False)
@@ -125,19 +150,39 @@ class SettingsWindow(object):
         self.root.protocol("WM_DELETE_WINDOW", self._close_anim)
 
         try:
-            self.sc = max(1.0, min(2.0, float(self.root.winfo_fpixels("1i")) / 96.0))
+            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
+                                    * self.uscale))
         except Exception:
-            self.sc = 1.0
+            self.sc = self.uscale
 
         self._shell = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0, border_width=0)
         self._shell.pack(fill="both", expand=True)
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        wa_h = sh - 120
-        self._x = max(8, (sw - W) // 2)
-        self.root.geometry("%dx%d+%d+%d" % (W, 600, self._x, 0))
+        self._sw, self._sh = sw, sh
+        self._x = max(8, (sw - self._ww()) // 2)
+        self.root.geometry("%dx%d+%d+%d" % (self._ww(), int(round(600 * self.uscale)),
+                                           self._x, 0))
 
+        self.compact = False
+        self._foot_host = None
+        self._layout_all()
+        self._style_titlebar()
+        self._bind_keys()
+
+    # ---------- 尺寸 / 缩放 ----------
+    def _ww(self):
+        return int(round(W * self.uscale))
+
+    def _wa_h(self):
+        return self._sh - 120
+
+    def _layout_all(self):
+        """(重)建全部控件 + 定尺寸。换界面大小档位时直接重跑这个(不重建 root:
+        customtkinter 的 ScalingTracker 是单例,root 重建会炸)"""
+        for ch in self._shell.winfo_children():
+            ch.destroy()
         self.compact = False
         # 底栏固定在窗口底部(两种布局都如此):保存/取消永远可见
         self._foot_host = ctk.CTkFrame(self._shell, fg_color=BG, corner_radius=0)
@@ -146,20 +191,18 @@ class SettingsWindow(object):
         self._build_body(body)
         self.root.update_idletasks()
         need = self.root.winfo_reqheight()
-        if need > wa_h:
+        if need > self._wa_h():
             body.destroy()
             self.compact = True
             body = self._body_parent()
             self._build_body(body, with_footer=False)     # 底栏已经建好了,别重复
             self.root.update_idletasks()
-            need = wa_h
-        self.h = int(min(need, wa_h))
-        self._size = (W, self.h)
-        self._y = max(12, (sh - self.h) // 2 - 26)
-        self.root.geometry("%dx%d+%d+%d" % (W, self.h, self._x, self._y))
+            need = self._wa_h()
+        self.h = int(min(need, self._wa_h()))
+        self._size = (self._ww(), self.h)
+        self._y = max(12, (self._sh - self.h) // 2 - 26)
+        self.root.geometry("%dx%d+%d+%d" % (self._ww(), self.h, self._x, self._y))
         self.root.update_idletasks()
-        self._style_titlebar()
-        self._bind_keys()
 
     # ---------- 布局 ----------
     def _body_parent(self):
@@ -175,7 +218,7 @@ class SettingsWindow(object):
 
     def _build_body(self, body=None, with_footer=True):
         body = body if body is not None else self._body_parent()
-        ctk.CTkFrame(body, fg_color="transparent", height=12).pack(fill="x")
+        ctk.CTkFrame(body, fg_color="transparent", height=_p(12)).pack(fill="x")
         self._api_card(body)
         self._behaviour_card(body)
         self._details_card(body)
@@ -186,13 +229,14 @@ class SettingsWindow(object):
     def _api_card(self, body):
         card = Card(body, "DEEPSEEK 账号", self.sc)
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=16, pady=(13, 15))
+        inner.pack(fill="x", padx=_p(16), pady=(_p(13), _p(15)))
 
         ctk.CTkLabel(inner, text="API Key", font=_font(12.5), text_color=TEXT,
                      anchor="w").pack(anchor="w")
         ctk.CTkLabel(inner, text="余额功能需要你自己的 Key —— 只读接口,不消耗 token;"
                                 "不填也能用,只是不显示余额",
-                     font=_font(10), text_color=FAINT, anchor="w").pack(anchor="w", pady=(2, 9))
+                     font=_font(10), text_color=FAINT, anchor="w").pack(
+                         anchor="w", pady=(_p(2), _p(9)))
 
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x")
@@ -205,16 +249,16 @@ class SettingsWindow(object):
         self.btn_eye = ui.Button(row, "显示", command=self._toggle_show, bg=CARD,
                                  kind="soft", width=58, height=36, font=_font(12),
                                  sc=self.sc)
-        self.btn_eye.pack(side="left", padx=(9, 0))
+        self.btn_eye.pack(side="left", padx=(_p(9), 0))
 
         row2 = ctk.CTkFrame(inner, fg_color="transparent")
-        row2.pack(fill="x", pady=(10, 0))
+        row2.pack(fill="x", pady=(_p(10), 0))
         self.btn_test = ui.Button(row2, "测试连接", command=self._test, bg=CARD,
                                   kind="soft", width=96, height=32, font=_font(12),
                                   sc=self.sc)
         self.btn_test.pack(side="left")
         self.lbl_test = ctk.CTkLabel(row2, text="", font=_font(11), text_color=SUB)
-        self.lbl_test.pack(side="left", padx=10)
+        self.lbl_test.pack(side="left", padx=_p(10))
 
     def _behaviour_card(self, body):
         card = Card(body, "外观与行为", self.sc)
@@ -236,66 +280,80 @@ class SettingsWindow(object):
             ("开机自启", "登录 Windows 后出现", self.var_auto),
         ]
         grid = ctk.CTkFrame(card, fg_color="transparent")
-        grid.pack(fill="x", padx=12, pady=12)
+        grid.pack(fill="x", padx=_p(12), pady=_p(12))
         grid.grid_columnconfigure(0, weight=1, uniform="c")
         grid.grid_columnconfigure(1, weight=1, uniform="c")
         for i, (t, d, v) in enumerate(rows):
             cell = SwitchCell(grid, t, d, v, self.sc)
-            cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=6, pady=7)
+            cell.grid(row=i // 2, column=i % 2, sticky="ew", padx=_p(6), pady=_p(7))
 
     def _details_card(self, body):
         card = Card(body, "细节", self.sc)
 
         # 大小
         row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=16, pady=(14, 4))
-        ctk.CTkLabel(row, text="大小", font=_font(12.5), text_color=TEXT, width=56,
+        row.pack(fill="x", padx=_p(16), pady=(_p(14), _p(4)))
+        ctk.CTkLabel(row, text="大小", font=_font(12.5), text_color=TEXT, width=_p(56),
                      anchor="w").pack(side="left")
         self.var_level = tk.IntVar(value=int(self.cfg.get("size_level", 1)))
         self.lbl_level = ctk.CTkLabel(row, text=LEVEL_TEXT[self.var_level.get()],
-                                      font=_font(11), text_color=SUB, width=36)
+                                      font=_font(11), text_color=SUB, width=_p(36))
         self.lbl_level.pack(side="right")
         self.sld_level = ui.Slider(row, 0, len(LEVEL_TEXT) - 1, self.var_level.get(),
                                    bg=CARD, command=self._on_level, steps=len(LEVEL_TEXT),
                                    width=300, sc=self.sc)
-        self.sld_level.pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.sld_level.pack(side="left", fill="x", expand=True, padx=(_p(10), _p(10)))
 
         # 余额刷新
         row2 = ctk.CTkFrame(card, fg_color="transparent")
-        row2.pack(fill="x", padx=16, pady=(4, 4))
-        ctk.CTkLabel(row2, text="余额刷新", font=_font(12.5), text_color=TEXT, width=56,
+        row2.pack(fill="x", padx=_p(16), pady=(_p(4), _p(4)))
+        ctk.CTkLabel(row2, text="余额刷新", font=_font(12.5), text_color=TEXT, width=_p(56),
                      anchor="w").pack(side="left")
         _cur = int(self.cfg.get("refresh_sec", 30))
         _ri = min(range(len(REFRESH_CHOICES)), key=lambda i: abs(REFRESH_CHOICES[i] - _cur))
         self.var_ridx = tk.IntVar(value=_ri)
         self.var_refresh = tk.IntVar(value=REFRESH_CHOICES[_ri])
         self.lbl_refresh = ctk.CTkLabel(row2, text="%d 秒" % REFRESH_CHOICES[_ri],
-                                        font=_font(11), text_color=SUB, width=36)
+                                        font=_font(11), text_color=SUB, width=_p(36))
         self.lbl_refresh.pack(side="right")
         ui.Slider(row2, 0, len(REFRESH_CHOICES) - 1, _ri, bg=CARD,
                   command=self._on_refresh, steps=len(REFRESH_CHOICES), width=300,
-                  sc=self.sc).pack(side="left", fill="x", expand=True, padx=(10, 10))
+                  sc=self.sc).pack(side="left", fill="x", expand=True, padx=(_p(10), _p(10)))
 
         # 喂文件
         row3 = ctk.CTkFrame(card, fg_color="transparent")
-        row3.pack(fill="x", padx=16, pady=(4, 15))
-        ctk.CTkLabel(row3, text="喂文件", font=_font(12.5), text_color=TEXT, width=56,
+        row3.pack(fill="x", padx=_p(16), pady=(_p(4), _p(4)))
+        ctk.CTkLabel(row3, text="喂文件", font=_font(12.5), text_color=TEXT, width=_p(56),
                      anchor="w").pack(side="left")
         self.var_feed = tk.StringVar(value="彻底删除" if self.cfg.get("hard_delete")
                                      else "回收站")
         self.seg = ui.Segmented(row3, ["回收站", "彻底删除"], self.var_feed, bg=CARD,
                                 command=self._on_feed, width=240, height=32,
                                 font=_font(11.5), sc=self.sc)
-        self.seg.pack(side="right", fill="x", expand=True, padx=(10, 0))
+        self.seg.pack(side="right", fill="x", expand=True, padx=(_p(10), 0))
+
+        # 界面大小(小/中/大)—— 即改即生效;小档装不下就自动上下滚
+        row4 = ctk.CTkFrame(card, fg_color="transparent")
+        row4.pack(fill="x", padx=_p(16), pady=(_p(4), _p(15)))
+        ctk.CTkLabel(row4, text="界面大小", font=_font(12.5), text_color=TEXT, width=_p(56),
+                     anchor="w").pack(side="left")
+        self.var_uiscale = tk.StringVar(value=UI_SCALE_TEXT[self.ui_level])
+        self.seg_ui = ui.Segmented(row4, UI_SCALE_TEXT, self.var_uiscale, bg=CARD,
+                                   command=self._on_ui_scale, width=170, height=32,
+                                   font=_font(11.5), sc=self.sc)
+        self.seg_ui.pack(side="right", padx=(_p(10), 0))
+        self.lbl_uihint = ctk.CTkLabel(row4, text="小档装不下时可上下滚",
+                                       font=_font(10), text_color=FAINT)
+        self.lbl_uihint.pack(side="right", padx=(0, _p(8)))
 
     def _footer(self, body):
         span = ctk.CTkFrame(body, fg_color="transparent")
-        span.pack(fill="x", padx=18, pady=(2, 14))
-        ui.hairline(span, "#DFE0E6").pack(fill="x", pady=(0, 10))
+        span.pack(fill="x", padx=_p(18), pady=(_p(2), _p(14)))
+        ui.hairline(span, "#DFE0E6").pack(fill="x", pady=(0, _p(10)))
         ctk.CTkLabel(span, text="配置:%s" % config_path(), font=_font(10),
                      text_color="#B0B2B8", anchor="w").pack(anchor="w")
         row = ctk.CTkFrame(span, fg_color="transparent")
-        row.pack(fill="x", pady=(10, 0))
+        row.pack(fill="x", pady=(_p(10), 0))
         ui.Button(row, "关于", command=self._about, bg=BG, kind="ghost", width=68,
                   height=34, font=_font(12), text_color=SUB, sc=self.sc).pack(side="left")
         self.btn_save = ui.Button(row, "保存并应用", command=self._save, bg=BG,
@@ -350,6 +408,56 @@ class SettingsWindow(object):
     def _on_feed(self, value=None):
         self.var_feed.set("彻底删除" if value == "彻底删除" else "回收站")
 
+    def _on_ui_scale(self, value=None):
+        """界面大小:即改即生效 —— 记下新档位,把当前(未保存的)改动一起带过去重建窗口"""
+        try:
+            lv = UI_SCALE_TEXT.index(value)
+        except Exception:
+            return
+        if lv == self.ui_level:
+            return
+        self.ui_level = lv
+        self.var_uiscale.set(UI_SCALE_TEXT[lv])
+        self.lbl_uihint.configure(text="正换挡…", text_color=SUB)
+        if not self._rebuilding:
+            self._rebuilding = True
+            self.root.after(90, self._rebuild)
+
+    def _rebuild(self):
+        """换个档位就地重建控件 —— 当前界面上(哪怕还没保存)的改动原样保住"""
+        self.cfg = self._collect()            # ⬅️ 先存档,再重建
+        self.uscale = UI_SCALES[self.ui_level]
+        _UIK[0] = self.uscale
+        try:
+            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
+                                    * self.uscale))
+        except Exception:
+            self.sc = self.uscale
+        self._x = max(8, (self._sw - self._ww()) // 2)
+        self._layout_all()
+        self._style_titlebar()
+        self._rebuilding = False
+
+    def _collect(self):
+        """把界面上所有当前值收进一份 cfg(不落盘)—— 保存 / 换挡都用它"""
+        cfg = dict(self.cfg)
+        cfg["size_level"] = int(self.var_level.get())
+        cfg["wander"] = bool(self.var_wander.get())
+        cfg["calm"] = bool(self.var_calm.get())
+        cfg["topmost"] = bool(self.var_top.get())
+        cfg["auto_hide_fullscreen"] = bool(self.var_hide.get())
+        cfg["sounds"] = bool(self.var_snd.get())
+        cfg["chat"] = bool(self.var_chat.get())
+        cfg["hard_delete"] = (self.var_feed.get() == "彻底删除")
+        cfg["refresh_sec"] = max(10, int(self.var_refresh.get()))
+        cfg["ui_scale"] = int(self.ui_level)
+        old_key = config.get_api_key(cfg)
+        new_key = self.var_key.get().strip()
+        if new_key != old_key:
+            config.set_api_key(cfg, new_key)
+        cfg["autostart"] = bool(self.var_auto.get())
+        return cfg
+
     def _test(self):
         key = self.var_key.get().strip()
         if not key:
@@ -394,21 +502,7 @@ class SettingsWindow(object):
                   height=32, font=_font(12), sc=self.sc).pack(pady=14)
 
     def _save(self):
-        cfg = dict(self.cfg)
-        cfg["size_level"] = int(self.var_level.get())
-        cfg["wander"] = bool(self.var_wander.get())
-        cfg["calm"] = bool(self.var_calm.get())
-        cfg["topmost"] = bool(self.var_top.get())
-        cfg["auto_hide_fullscreen"] = bool(self.var_hide.get())
-        cfg["sounds"] = bool(self.var_snd.get())
-        cfg["chat"] = bool(self.var_chat.get())
-        cfg["hard_delete"] = (self.var_feed.get() == "彻底删除")
-        cfg["refresh_sec"] = max(10, int(self.var_refresh.get()))
-        old_key = config.get_api_key(cfg)
-        new_key = self.var_key.get().strip()
-        if new_key != old_key:
-            config.set_api_key(cfg, new_key)
-        cfg["autostart"] = bool(self.var_auto.get())
+        cfg = self._collect()
         config.save(cfg)
         autostart.apply(cfg["autostart"])
         self.saved = True
@@ -421,12 +515,24 @@ class SettingsWindow(object):
         if self._closing:
             return
         self._closing = True
+        # ⚠️ 兜底:动画万一被打断(异常/无焦点),也必须真的关掉并回调,
+        #    否则桌宠那边的"设置已打开"标志会永久卡住 → 再也打不开设置
+        try:
+            self.root.after(600, self._destroy)
+        except Exception:
+            pass
         _animate(self.root, self._x, self._y, 0.0, slide_from=16, steps=10, delay=11,
                  on_done=self._destroy)
 
-    def _destroy(self):
+    def _hide(self):
+        """关闭 = 隐藏(不销毁 root:见 __init__ 里的说明),并回调桌宠"""
+        if getattr(self, "_destroyed", False):
+            return
+        self._destroyed = True
+        self._hidden = True
+        self._closing = False
         try:
-            self.root.destroy()
+            self.root.withdraw()
         except Exception:
             pass
         if self.on_close:
@@ -435,16 +541,54 @@ class SettingsWindow(object):
             except Exception:
                 pass
 
-    def run(self):
-        def _show():
+    _destroy = _hide          # 兼容旧名字
+
+    def reopen(self, cfg, on_close=None):
+        """复用同一个窗口再开一次(带最新的配置)"""
+        self.cfg = dict(cfg)
+        self.on_close = on_close
+        self.saved = False
+        self._closing = False
+        self._hidden = False
+        self._destroyed = False
+        self._rebuilding = False
+        self.ui_level = max(0, min(len(UI_SCALES) - 1, int(self.cfg.get("ui_scale", 1))))
+        self.uscale = UI_SCALES[self.ui_level]
+        _UIK[0] = self.uscale
+        try:
+            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
+                                    * self.uscale))
+        except Exception:
+            self.sc = self.uscale
+        self._sw = self.root.winfo_screenwidth()
+        self._sh = self.root.winfo_screenheight()
+        self._x = max(8, (self._sw - self._ww()) // 2)
+        self._layout_all()
+        self._style_titlebar()
+        self._bind_keys()
+        self.show()
+
+    def show(self):
+        try:
+            self.root.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+
+        def _s():
             try:
                 self.root.deiconify()
                 self.root.lift()          # 打开时提到最前
             except Exception:
                 pass
-            _animate(self.root, self._x, self._y, 1.0, slide_from=26,
-                     on_done=self._focus)
-        self.root.after(30, _show)
+            _animate(self.root, self._x, self._y, 1.0, slide_from=26, on_done=self._focus)
+
+        try:
+            self.root.after(30, _s)
+        except Exception:
+            pass
+
+    def run(self):
+        self.show()
         self.root.mainloop()
 
     def _focus(self):
@@ -455,13 +599,49 @@ class SettingsWindow(object):
 
 
 def open_settings(cfg, on_close=None):
-    """在独立线程里开设置窗口(不阻塞桌宠的消息循环)"""
-    def _go():
-        try:
-            SettingsWindow(cfg, on_close).run()
-        except Exception:
-            if on_close:
-                on_close()
-    th = threading.Thread(target=_go, daemon=True)
+    """开/复用设置窗口。
+    ⚠️ 一个进程只建一次 Tk root(customtkinter 的 ScalingTracker 绑死第一个 root,
+       destroy 后再新建必崩)→ 关掉只是 withdraw,再开就复用同一个窗口。
+    桌宠线程通过队列发请求,设置线程用 after 轮询处理(Tk 不能跨线程调用)。"""
+    th = _SESSION.get("thread")
+    with _LOCK:
+        _QUEUE.append((cfg, on_close))
+    if th is not None and th.is_alive():
+        return th
+    th = threading.Thread(target=_session_run, daemon=True)
+    _SESSION["thread"] = th
     th.start()
     return th
+
+
+def _session_run():
+    root = ctk.CTk()
+    root.withdraw()
+    state = {"win": None}
+
+    def _poll():
+        req = None
+        with _LOCK:
+            if _QUEUE:
+                req = _QUEUE.pop(0)
+        if req is not None:
+            cfg, on_close = req
+            try:
+                if state["win"] is None:
+                    state["win"] = SettingsWindow(cfg, on_close, root=root)
+                    state["win"].show()
+                else:
+                    state["win"].reopen(cfg, on_close)
+            except Exception:
+                if on_close:
+                    try:
+                        on_close()
+                    except Exception:
+                        pass
+        try:
+            root.after(80, _poll)
+        except Exception:
+            pass
+
+    root.after(80, _poll)
+    root.mainloop()
