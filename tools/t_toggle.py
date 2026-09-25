@@ -41,7 +41,7 @@ def find_canvas(widget, out):
 
 
 find_canvas(w.root, btns)
-togs = [c for c in btns if hasattr(c, "var") and c.winfo_width() == 46]
+togs = [c for c in btns if hasattr(c, "var") and c.winfo_width() >= 45]
 print("toggles found:", len(btns), "->", len(togs))
 tog = togs[0]
 frames = []
