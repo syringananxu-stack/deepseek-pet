@@ -38,6 +38,10 @@ def _dpi_aware():
 
 
 def main():
+    # 「工具箱 → 内存优化」提权后的那个自己:只清内存,不建窗口、不抢单实例互斥体
+    if "--mem-purge" in sys.argv:
+        from .memopt import helper_main
+        return helper_main()
     _dpi_aware()
     _h, first = _single_instance()
     if not first:

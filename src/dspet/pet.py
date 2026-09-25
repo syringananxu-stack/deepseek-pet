@@ -265,6 +265,7 @@ class Pet(object):
         self.vy = 0.0
         self._tickn = 0
         self._last_sec = 0            # 上一次按"秒"刷气泡的时刻(倒计时每秒要走)
+        self._menu_open = False       # 右键菜单开着时:冻住 + 临时不置顶
         self._period = 0
         self._last_move_t = 0.0
         self._pos_valid = False
@@ -460,7 +461,8 @@ class Pet(object):
             return
         self.x, self.y = ix, iy
         self._pos_valid = True
-        z = win32con.HWND_TOPMOST if self.topmost else win32con.HWND_NOTOPMOST
+        z = (win32con.HWND_TOPMOST if (self.topmost and not self._menu_open)
+             else win32con.HWND_NOTOPMOST)
         win32gui.SetWindowPos(self.hwnd, z, self.x, self.y, self.w, self.h,
                               win32con.SWP_NOACTIVATE | win32con.SWP_NOSENDCHANGING)
 
@@ -696,7 +698,7 @@ class Pet(object):
         now = time.time()
         need = False
         anim = False
-        if self._spring_active():
+        if self._spring_active() and not self._menu_open:
             anim = self._spring_step()
             need = True
         excited = now < self._egg_until
@@ -714,7 +716,7 @@ class Pet(object):
             self.override_until = self._egg_until + 5
             need = True
         moving = (excited or
-                  (self.wander and not self.dragging
+                  (self.wander and not self.dragging and not self._menu_open
                    and (not self.calm_mode or now >= self.still_until)))
         if moving and not self._moving:
             self._init_velocity(egg=excited)   # 歇够了重新出发,顺便换个方向
@@ -969,15 +971,39 @@ class Pet(object):
 
     # ---------- 菜单 ----------
     def _menu(self):
-        """右键只留两件事:开设置 / 退出(其余设置都进 UI 了)"""
-        m = win32gui.CreatePopupMenu()
-        win32gui.AppendMenu(m, win32con.MF_STRING, 20, "打开设置界面…")
-        win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 3, "退出桌宠")
-        p = win32gui.GetCursorPos()
-        cmd = win32gui.TrackPopupMenu(m, win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
-                                      p[0], p[1], 0, self.hwnd, None)
-        win32gui.DestroyMenu(m)
+        """右键只留两件事:开设置 / 退出(其余设置都进 UI 了)
+
+        ⚠️ 东家要求:右键时她要**先停住**,而且**别挡着别的窗口**(菜单也得盖在她上面)。
+           她是置顶窗,所以要:①冻住走动 ②临时降成非置顶 → 菜单(她的弹出菜单)自然压在她上面、
+           别的窗口也不会被她盖住;菜单关掉后恢复置顶。"""
+        self._menu_open = True
+        self._moving = False
+        self.squash = 0.0
+        self.sqv = 0.0
+        try:
+            win32gui.SetWindowPos(self.hwnd, win32con.HWND_NOTOPMOST, self.x, self.y,
+                                  self.w, self.h,
+                                  win32con.SWP_NOACTIVATE | win32con.SWP_NOSENDCHANGING)
+        except Exception:
+            pass
+        try:
+            m = win32gui.CreatePopupMenu()
+            win32gui.AppendMenu(m, win32con.MF_STRING, 20, "打开设置界面…")
+            win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
+            win32gui.AppendMenu(m, win32con.MF_STRING, 3, "退出桌宠")
+            p = win32gui.GetCursorPos()
+            cmd = win32gui.TrackPopupMenu(m, win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
+                                          p[0], p[1], 0, self.hwnd, None)
+            win32gui.DestroyMenu(m)
+        finally:
+            self._menu_open = False
+            if self.topmost:
+                try:
+                    win32gui.SetWindowPos(self.hwnd, win32con.HWND_TOPMOST, self.x, self.y,
+                                          self.w, self.h,
+                                          win32con.SWP_NOACTIVATE | win32con.SWP_NOSENDCHANGING)
+                except Exception:
+                    pass
 
         if cmd == 20:
             self.open_settings()

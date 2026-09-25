@@ -224,6 +224,7 @@ class SettingsWindow(object):
         self._api_card(body)
         self._behaviour_card(body)
         self._details_card(body)
+        self._toolbox_card(body)
         if with_footer:
             self._footer(self._foot_host)
         return body
@@ -347,6 +348,59 @@ class SettingsWindow(object):
         self.lbl_uihint = ctk.CTkLabel(row4, text="装不下会自动上下滚",
                                        font=_font(10), text_color=FAINT)
         self.lbl_uihint.pack(side="right", padx=(0, _p(8)))
+
+    def _toolbox_card(self, body):
+        """工具箱 —— 目前一个「内存优化」(对标 PCL2 启动器那个)"""
+        card = Card(body, "工具箱", self.sc)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=_p(16), pady=(_p(14), 0))
+        left = ctk.CTkFrame(row, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(left, text="内存优化", font=_font(12.5), text_color=TEXT,
+                     anchor="w").pack(anchor="w")
+        ctk.CTkLabel(left, text="清掉系统待机内存和修改页,腾出可用内存",
+                     font=_font(10), text_color=FAINT, anchor="w").pack(
+                         anchor="w", pady=(_p(2), 0))
+        self.btn_mem = ui.Button(row, "立即优化", command=self._mem_optimize, bg=CARD,
+                                 kind="primary", width=92, height=32, font=_font(12),
+                                 sc=self.sc)
+        self.btn_mem.pack(side="right")
+        self._mem_busy = False
+        self.lbl_mem = ctk.CTkLabel(card, text="清系统缓存需要管理员权限 —— 会弹一次 UAC,点『是』即可",
+                                    font=_font(10.5), text_color=SUB, anchor="w",
+                                    justify="left", wraplength=int(420 * self.sc))
+        self.lbl_mem.pack(fill="x", padx=_p(16), pady=(_p(7), _p(15)))
+
+    def _mem_optimize(self):
+        if self._mem_busy:
+            return
+        self._mem_busy = True
+        self._mem_result = None
+        self.btn_mem.set_text("优化中…")
+        self.lbl_mem.configure(text="正在清理…(若弹出 UAC,请点『是』,不然清不了系统缓存)",
+                               text_color=SUB)
+        threading.Thread(target=self._mem_work, daemon=True).start()
+        # ⚠️ 结果用主线程轮询取回:从工作线程直接调 tk 的 after 在有些环境会失败
+        self._mem_poll()
+
+    def _mem_work(self):
+        try:
+            from . import memopt
+            _ok, res = memopt.optimize()
+            self._mem_result = memopt.text_of(res)
+        except Exception as e:                      # 别让 UI 线程炸
+            self._mem_result = "失败:%s" % e
+
+    def _mem_poll(self):
+        if self._mem_result is None:
+            try:
+                self.root.after(120, self._mem_poll)
+            except Exception:
+                pass
+            return
+        self._mem_busy = False
+        self.btn_mem.set_text("立即优化")
+        self.lbl_mem.configure(text=self._mem_result, text_color=SUB)
 
     def _footer(self, body):
         span = ctk.CTkFrame(body, fg_color="transparent")
