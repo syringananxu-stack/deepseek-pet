@@ -33,23 +33,24 @@ _LOCK = threading.Lock()
 LEVEL_TEXT = ["最小", "小", "中", "大", "最大"]
 REFRESH_CHOICES = [10, 15, 30, 60, 120, 300]
 
-# 设置界面缩放:小 / 中 / 大(三档,只在设置里调)
-UI_SCALES = [0.85, 1.0, 1.18]
+# 设置界面大小:小 / 中 / 大(三档,只在设置里调)
+# ⚠️ 东家定调:三档**只改内容区宽度**(窄一点行就挤/换行),**字号和控件大小一律不变**
+UI_WIDTHS = [470, 580, 700]
 UI_SCALE_TEXT = ["小", "中", "大"]
-_UIK = [1.0]                # 当前界面缩放系数(字号/间距用)
+_UIK = [1.0]                # 保留但恒为 1.0:字号/间距不再随档位缩放
 
 Toggle = ui.Switch          # 兼容旧名字
 
 
 def _font(size=13, bold=False):
     return ctk.CTkFont(family="Microsoft YaHei UI",
-                       size=max(7, int(round(size * _UIK[0]))),
+                       size=max(7, int(round(size))),
                        weight="bold" if bold else "normal")
 
 
 def _p(n):
-    """界面缩放后的间距/尺寸(跟随 小/中/大 档位)"""
-    return int(round(n * _UIK[0]))
+    """间距/尺寸(不随档位变;留着这个名字是为了少改调用点)"""
+    return int(n)
 
 
 # ---------------- 窗口动画 ----------------
@@ -133,10 +134,8 @@ class SettingsWindow(object):
         self._rebuilding = False
         self.sc = 1.0
 
-        # 界面缩放(小/中/大)—— 必须在建任何控件之前设好
-        self.ui_level = max(0, min(len(UI_SCALES) - 1, int(self.cfg.get("ui_scale", 1))))
-        self.uscale = UI_SCALES[self.ui_level]
-        _UIK[0] = self.uscale
+        # 界面大小(小/中/大)—— 必须在建任何控件之前设好
+        self.ui_level = max(0, min(len(UI_WIDTHS) - 1, int(self.cfg.get("ui_scale", 1))))
 
         ctk.set_appearance_mode("light")
         # ⚠️ root 由外面传进来(一个进程只建一次):customtkinter 的 ScalingTracker 是
@@ -150,10 +149,9 @@ class SettingsWindow(object):
         self.root.protocol("WM_DELETE_WINDOW", self._close_anim)
 
         try:
-            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
-                                    * self.uscale))
+            self.sc = max(0.75, min(2.4, float(self.root.winfo_fpixels("1i")) / 96.0))
         except Exception:
-            self.sc = self.uscale
+            self.sc = 1.0
 
         self._shell = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0, border_width=0)
         self._shell.pack(fill="both", expand=True)
@@ -162,7 +160,7 @@ class SettingsWindow(object):
         sh = self.root.winfo_screenheight()
         self._sw, self._sh = sw, sh
         self._x = max(8, (sw - self._ww()) // 2)
-        self.root.geometry("%dx%d+%d+%d" % (self._ww(), int(round(600 * self.uscale)),
+        self.root.geometry("%dx%d+%d+%d" % (self._ww(), min(760, self._sh - 160),
                                            self._x, 0))
 
         self.compact = False
@@ -173,7 +171,8 @@ class SettingsWindow(object):
 
     # ---------- 尺寸 / 缩放 ----------
     def _ww(self):
-        return int(round(W * self.uscale))
+        """窗口内容区宽度 —— 三档只改这里,字号/控件大小一律不变"""
+        return UI_WIDTHS[self.ui_level]
 
     def _wa_h(self):
         return self._sh - 120
@@ -342,7 +341,7 @@ class SettingsWindow(object):
                                    command=self._on_ui_scale, width=170, height=32,
                                    font=_font(11.5), sc=self.sc)
         self.seg_ui.pack(side="right", padx=(_p(10), 0))
-        self.lbl_uihint = ctk.CTkLabel(row4, text="小档装不下时可上下滚",
+        self.lbl_uihint = ctk.CTkLabel(row4, text="装不下会自动上下滚",
                                        font=_font(10), text_color=FAINT)
         self.lbl_uihint.pack(side="right", padx=(0, _p(8)))
 
@@ -418,24 +417,22 @@ class SettingsWindow(object):
             return
         self.ui_level = lv
         self.var_uiscale.set(UI_SCALE_TEXT[lv])
-        self.lbl_uihint.configure(text="正换挡…", text_color=SUB)
         if not self._rebuilding:
             self._rebuilding = True
-            self.root.after(90, self._rebuild)
+            self.root.after(40, self._rebuild)
 
     def _rebuild(self):
-        """换个档位就地重建控件 —— 当前界面上(哪怕还没保存)的改动原样保住"""
+        """换个档位就地重建控件(只换窗口宽度,字号不动)。
+        重建瞬间整窗淡出 → 换完淡入,避免看到控件闪一下。"""
         self.cfg = self._collect()            # ⬅️ 先存档,再重建
-        self.uscale = UI_SCALES[self.ui_level]
-        _UIK[0] = self.uscale
         try:
-            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
-                                    * self.uscale))
+            self.root.attributes("-alpha", 0.0)
         except Exception:
-            self.sc = self.uscale
+            pass
         self._x = max(8, (self._sw - self._ww()) // 2)
         self._layout_all()
         self._style_titlebar()
+        _animate(self.root, self._x, self._y, 1.0, slide_from=0, steps=7, delay=10)
         self._rebuilding = False
 
     def _collect(self):
@@ -552,14 +549,11 @@ class SettingsWindow(object):
         self._hidden = False
         self._destroyed = False
         self._rebuilding = False
-        self.ui_level = max(0, min(len(UI_SCALES) - 1, int(self.cfg.get("ui_scale", 1))))
-        self.uscale = UI_SCALES[self.ui_level]
-        _UIK[0] = self.uscale
+        self.ui_level = max(0, min(len(UI_WIDTHS) - 1, int(self.cfg.get("ui_scale", 1))))
         try:
-            self.sc = max(0.75, min(2.4, (float(self.root.winfo_fpixels("1i")) / 96.0)
-                                    * self.uscale))
+            self.sc = max(0.75, min(2.4, float(self.root.winfo_fpixels("1i")) / 96.0))
         except Exception:
-            self.sc = self.uscale
+            self.sc = 1.0
         self._sw = self.root.winfo_screenwidth()
         self._sh = self.root.winfo_screenheight()
         self._x = max(8, (self._sw - self._ww()) // 2)
