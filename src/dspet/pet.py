@@ -31,15 +31,23 @@ TICK_IDLE = 500
 TICK_WALK = 20
 TICK_ANIM = 20
 
-INFO_SECONDS = 9
-OVERRIDE_SECONDS = 5
+INFO_SECONDS = 5
+OVERRIDE_SECONDS = 4
 SPEED_MIN, SPEED_MAX = 26.0, 44.0
 
-K_SPRING = 0.16
-C_SPRING = 0.11
+# 弹簧参数(偏硬一点 → 点击反应更短促、每次都是干净的一下)
+K_SPRING = 0.22
+C_SPRING = 0.15
 HOLD_STRETCH = -0.45
 IMP_GRAB = -0.34
-IMP_CLICK = 0.30
+IMP_CLICK = 0.30        # 菜单「弹一下」/ 吃东西用
+POP_PRESET = -0.17      # 点击前先"压一下",保证每次都从同一状态弹起
+POP_IMPULSE = 0.60      # 点击冲击(比之前大,反应更明显)
+
+# 安静 / 溜达节奏(秒):被打扰后先老实待着,冷落够了才自己溜达
+CALM_INIT = (20, 45)      # 刚启动:先静止多久
+CALM_AFTER = (25, 55)     # 被点/被菜单打扰后
+CALM_AFTER_DRAG = (45, 120)   # 被抓住拖过之后 → 老实很久
 
 WM_APP_RELOAD = win32con.WM_APP + 1
 
@@ -68,36 +76,35 @@ shell32 = ctypes.windll.shell32
 SPI_GETWORKAREA = 0x0030
 
 CHAT = [
-    "哼,又来啦?余额什么的,人家才不关心呢。",
-    "看什么看嘛,人家又不会给你打折。",
-    "诶——你在偷看人家吧?大变态。",
-    "钱包又瘪了?笨蛋主人,真拿你没办法。",
-    "别乱点啦,人家会烦的……才不是害羞!",
-    "摸摸头?做梦哦,笨蛋。",
-    "人家可是很忙的,少来打扰我。",
-    "点一次人家记一次账,笨蛋。",
-    "省着点用吧,不然月底又要哭鼻子咯。",
-    "就这么想看到人家?真是没办法呢。",
-    "一直盯着看干嘛……人家又不是宠物。",
-    "哼,今天也很有精神嘛,笨蛋。",
-    "再点一下人家就咬你哦,嗷呜。",
-    "真拿你没办法,就陪你一会儿吧。",
-    "杂鱼,连点人的力气都这么小。",
-    "废物主人,这点钱就开始心疼啦?",
-    "哈?就这?杂鱼就是杂鱼。",
-    "笨蛋笨蛋笨蛋——哼,骂够了吧。",
-    "人家可是很厉害的,才不像你这种杂鱼。",
-    "啧,又来蹭人家的脸,废物。",
-    "杂鱼杂鱼,今天也一如既往地没用呢。",
-    "钱花得这么快,你是猪吗?笨蛋。",
-    "人家走两步都不行?真是的,笨蛋。",
-    "这么多文件乱丢,你妈妈都不收拾你吗?",
-    "拎人家像拎一只史莱姆,你手别抖啊笨蛋。",
+    "哼,又来看人家?",
+    "看什么看,笨蛋。",
+    "诶——你偷看人家!",
+    "钱包又瘪了?笨蛋。",
+    "别乱点啦,会烦的。",
+    "摸摸头?做梦哦。",
+    "人家忙着呢,少烦。",
+    "点一次记你一次账。",
+    "省着点花,笨蛋。",
+    "就这么想人家?",
+    "盯着看干嘛,杂鱼。",
+    "再点就咬你哦,嗷呜。",
+    "真拿你没办法……",
+    "杂鱼,力气真小。",
+    "这点钱就心疼啦?",
+    "哈?就这?杂鱼。",
+    "笨蛋笨蛋笨蛋——",
+    "人家才不是害羞!",
+    "啧,又来蹭人家脸。",
+    "钱花这么快,猪吗?",
+    "走两步都不行?",
+    "文件乱丢,猪窝吗?",
+    "拎人家像拎史莱姆?",
+    "手别抖啊,笨蛋。",
 ]
 CHAT_LATE = [
-    "这么晚了还不睡?笨蛋,熬坏了我可不管。",
-    "夜猫子……哼,人家勉强陪你一会儿。",
-    "都这个点了还在折腾,真是的。",
+    "这么晚还不睡?笨蛋。",
+    "夜猫子,陪你一会儿。",
+    "都几点了还在折腾。",
 ]
 
 
@@ -177,6 +184,9 @@ class Pet(object):
         self.balance = None
         self.err = ""
         self.pending_key = None
+        self.calm_mode = bool(self.cfg.get("calm", True))
+        self.still_until = 0.0
+        self._moving = False
 
         self.level = max(0, min(len(LEVELS) - 1, int(self.cfg.get("size_level", 1))))
         self.wander = bool(self.cfg.get("wander", True))
@@ -219,6 +229,7 @@ class Pet(object):
         self._layout()
         self._create_window()
         self._init_velocity()
+        self.still_until = time.time() + self._delay(CALM_INIT)   # 开机先安静待着
 
     # ---------- 调试 ----------
     def _dbg(self, tag):
@@ -241,6 +252,35 @@ class Pet(object):
             self.vx = 9.0 if self.vx >= 0 else -9.0
         if abs(self.vy) < 6.0:
             self.vy = 6.0 if self.vy >= 0 else -6.0
+
+    # ---------- 安静 / 溜达节奏 ----------
+    def _delay(self, rng):
+        fast = os.environ.get("DSPET_FAST_STILL")
+        if fast:                                    # 自查用:固定等待秒数
+            try:
+                return float(fast)
+            except ValueError:
+                return 3.0
+        if not self.calm_mode:
+            return 0.0
+        return random.uniform(*rng)
+
+    def _go_calm(self, rng=CALM_AFTER):
+        """开始安静期:这段时间她待着不动,到点才继续溜达"""
+        self.still_until = time.time() + self._delay(rng)
+        self._moving = False
+
+    def _wants_to_move(self):
+        now = time.time()
+        return (self.wander and self.calm_mode and now >= self.still_until) or \
+               (self.wander and not self.calm_mode)
+
+    # ---------- 点击反馈 ----------
+    def _pop(self):
+        """每次点击都给一个完整、短促的一下(先把弹簧压回去,再弹起)"""
+        self.squash = POP_PRESET
+        self.sqv = 0.0
+        self._impulse(POP_IMPULSE)
 
     # ---------- 文本 ----------
     def _pick_chat(self):
@@ -408,8 +448,8 @@ class Pet(object):
         dy = int(round(10 * sq * s))
         f = self.char
         if abs(sq) > 0.01:
-            f = f.resize((max(8, int(f.width * (1 + 0.085 * sq))),
-                          max(8, int(f.height * (1 - 0.135 * sq)))), Image.BILINEAR)
+            f = f.resize((max(8, int(f.width * (1 + 0.15 * sq))),
+                          max(8, int(f.height * (1 - 0.21 * sq)))), Image.BILINEAR)
         img.alpha_composite(f, ((self.w - f.width) // 2, self.h - f.height + dy))
         return img
 
@@ -482,12 +522,15 @@ class Pet(object):
         self.sqv += dv
         self._set_tick(TICK_ANIM)
 
-    def _bounce(self, amp=1.0, snd=True, sign=1):
+    def _bounce(self, amp=1.0, snd=True, sign=1, pop=False):
         if snd and self.sounds:
             play_sound(self.snd_press)
-        self.sq_target = 0.0
-        self._impulse(IMP_CLICK * amp * sign)
-        self._dbg("impulse %.3f" % (IMP_CLICK * amp * sign))
+        if pop:
+            self._pop()                 # 每次都从压扁状态弹起 → 一击一下就有效果
+        else:
+            self.sq_target = 0.0
+            self._impulse(IMP_CLICK * amp * sign)
+        self._dbg("bounce pop=%s" % pop)
 
     def _step_wander(self):
         wa = work_area()
@@ -524,7 +567,12 @@ class Pet(object):
         if self._spring_active():
             anim = self._spring_step()
             need = True
-        if self.wander and not self.dragging:
+        moving = (self.wander and not self.dragging
+                  and (not self.calm_mode or now >= self.still_until))
+        if moving and not self._moving:
+            self._init_velocity()          # 歇够了重新出发,顺便换个方向
+        self._moving = moving
+        if moving:
             self._step_wander()
         if now >= self.chat_until and now >= self.info_until and now >= self.override_until:
             self.chat = self._pick_chat()
@@ -535,7 +583,7 @@ class Pet(object):
         if need:
             self._redraw()
         if not self.dragging:
-            self._set_tick(TICK_ANIM if anim else (TICK_WALK if self.wander else TICK_IDLE))
+            self._set_tick(TICK_ANIM if anim else (TICK_WALK if moving else TICK_IDLE))
 
     # ---------- 余额 ----------
     def _refresh_once(self):
@@ -670,6 +718,7 @@ class Pet(object):
         self.cfg["pos"] = [self.x, self.y]
         self.cfg["size_level"] = self.level
         self.cfg["wander"] = self.wander
+        self.cfg["calm"] = self.calm_mode
         self.cfg["topmost"] = self.topmost
         self.cfg["auto_hide_fullscreen"] = self.auto_hide_fs
         self.cfg["sounds"] = self.sounds
@@ -688,6 +737,9 @@ class Pet(object):
         self.refresh_sec = max(10, int(self.cfg.get("refresh_sec", 30)))
         new_level = max(0, min(len(LEVELS) - 1, int(self.cfg.get("size_level", 1))))
         self.wander = bool(self.cfg.get("wander", True))
+        self.calm_mode = bool(self.cfg.get("calm", True))
+        if not self.calm_mode:
+            self.still_until = 0.0
         self.topmost = bool(self.cfg.get("topmost", True))
         self.auto_hide_fs = bool(self.cfg.get("auto_hide_fullscreen", True))
         self.sounds = bool(self.cfg.get("sounds", True))
@@ -797,6 +849,8 @@ class Pet(object):
         elif cmd == 3:
             self._save_cfg()
             win32gui.DestroyWindow(self.hwnd)
+        if cmd:
+            self._go_calm(CALM_AFTER)      # 菜单操作也算"被打扰"
 
     # ---------- 窗口消息 ----------
     def _wndproc(self, hwnd, msg, wparam, lparam):
@@ -827,6 +881,8 @@ class Pet(object):
         if msg == win32con.WM_LBUTTONDOWN:
             self.dragging, self.moved = True, False
             self.sq_target = HOLD_STRETCH
+            self.sqv = 0.0
+            self._moving = False
             self._impulse(IMP_GRAB)
             cx, cy = win32gui.GetCursorPos()
             self.drag_off = (cx - self.x, cy - self.y)
@@ -851,16 +907,21 @@ class Pet(object):
             self.sq_target = 0.0
             if self.moved:
                 self._snap()
+                self._set_pos(self.fx, self.fy)     # 吸附立刻生效,别等下次重绘才跳
                 self._save_cfg()
                 self.sqv += 0.02
+                self._go_calm(CALM_AFTER_DRAG)      # 被抓住过 → 老实很长一段时间
             elif not self.key:
                 self.override_txt = "还没填 API Key 呢,笨蛋。右键→设置。"
-                self.override_until = time.time() + 4
+                self.override_until = time.time() + OVERRIDE_SECONDS
+                self._go_calm(CALM_AFTER)
+                self._bounce(1.0, pop=True)
                 self._redraw()
                 self.open_settings()
             else:
                 self.info_until = time.time() + INFO_SECONDS
-                self._bounce(1.0)
+                self._go_calm(CALM_AFTER)
+                self._bounce(1.0, pop=True)
                 threading.Thread(target=self._refresh_once, daemon=True).start()
                 self._redraw()
             return 0

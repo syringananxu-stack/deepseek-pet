@@ -93,6 +93,7 @@ class SettingsWindow(object):
                   orient="horizontal", command=self._on_level).pack(side="left", fill="x", expand=True)
 
         self.var_wander = tk.BooleanVar(value=bool(self.cfg.get("wander", True)))
+        self.var_calm = tk.BooleanVar(value=bool(self.cfg.get("calm", True)))
         self.var_top = tk.BooleanVar(value=bool(self.cfg.get("topmost", True)))
         self.var_hide = tk.BooleanVar(value=bool(self.cfg.get("auto_hide_fullscreen", True)))
         self.var_snd = tk.BooleanVar(value=bool(self.cfg.get("sounds", True)))
@@ -100,6 +101,8 @@ class SettingsWindow(object):
 
         f = self._row(pad, "自主溜达")
         ttk.Checkbutton(f, text="让她在桌面上自己飘来飘去", variable=self.var_wander).pack(side="left")
+        f = self._row(pad, "安静模式")
+        ttk.Checkbutton(f, text="先老实待着,被冷落一会儿才溜达(被抓过更久)", variable=self.var_calm).pack(side="left")
         f = self._row(pad, "窗口置顶")
         ttk.Checkbutton(f, text="始终压在其他窗口上面", variable=self.var_top).pack(side="left")
         f = self._row(pad, "全屏游戏")
@@ -185,6 +188,7 @@ class SettingsWindow(object):
         cfg = dict(self.cfg)
         cfg["size_level"] = int(float(self.var_level.get()))
         cfg["wander"] = bool(self.var_wander.get())
+        cfg["calm"] = bool(self.var_calm.get())
         cfg["topmost"] = bool(self.var_top.get())
         cfg["auto_hide_fullscreen"] = bool(self.var_hide.get())
         cfg["sounds"] = bool(self.var_snd.get())

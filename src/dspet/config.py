@@ -14,6 +14,7 @@ DEFAULTS = {
     "api_key_enc": "",          # DPAPI 加密后的 base64
     "size_level": 1,            # 0..4
     "wander": True,             # 自主溜达
+    "calm": True,               # 安静模式:被打扰后先待着,冷落够了才溜达
     "topmost": True,            # 窗口置顶
     "auto_hide_fullscreen": True,   # 全屏游戏自动让位
     "sounds": True,             # 音效
