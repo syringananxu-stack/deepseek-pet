@@ -378,9 +378,10 @@ class Pet(object):
             else:
                 bal = "余额读不到"
             return "info", [(bal, NAVY, self.f1),
-                            ("● " + ("高峰 · 全价" if is_peak else "低谷 · 半价"),
+                            ("● " + ("梁文峰 · 全价" if is_peak else "梁文谷 · 半价"),
                              (RED if is_peak else GREEN), self.f2),
-                            (("→高峰 " if not is_peak else "→低谷 ") + balance.hms(left), GREY, self.f3)]
+                            (("距梁文峰 " if not is_peak else "距梁文谷 ") + balance.hms(left),
+                             GREY, self.f3)]
         return "chat", [(self.chat, MAGENTA, self.f2)]
 
     # ---------- 布局 ----------

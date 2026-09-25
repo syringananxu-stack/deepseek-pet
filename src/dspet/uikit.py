@@ -424,7 +424,18 @@ class Segmented(tk.Canvas):
         super().__init__(master, width=int(width * sc) + 2 * PAD,
                          height=int(height * sc) + 2 * PAD, bg=bg, bd=0,
                          highlightthickness=0, cursor="hand2")
-        self.var = tk.StringVar(value=value if value in self.values else self.values[0])
+        # ⚠️ value 可能是 StringVar(调用方要双向同步)也可能是普通字符串。
+        #    以前一律当字符串比较 → 传 var 时判断恒为假 → 内部新建 var 且默认选中
+        #    第一项 → 「界面大小」永远高亮"小"、「喂文件」永远高亮"回收站"(真 bug)。
+        if hasattr(value, "get") and hasattr(value, "set"):
+            self.var = value
+            try:
+                if value.get() not in self.values:
+                    value.set(self.values[0])
+            except Exception:
+                self.var = tk.StringVar(value=self.values[0])
+        else:
+            self.var = tk.StringVar(value=value if value in self.values else self.values[0])
         self._ph = None
         self._cw, self._inner = 0, 0
         self._id = self.create_image(0, 0, anchor="nw")
