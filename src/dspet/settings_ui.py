@@ -34,8 +34,9 @@ LEVEL_TEXT = ["最小", "小", "中", "大", "最大"]
 REFRESH_CHOICES = [10, 15, 30, 60, 120, 300]
 
 # 设置界面大小:小 / 中 / 大(三档,只在设置里调)
-# ⚠️ 东家定调:三档**只改内容区宽度**(窄一点行就挤/换行),**字号和控件大小一律不变**
+# ⚠️ 东家定调:三档**只改窗口大小**(窄一点行就挤/换行),**字号和控件大小一律不变**
 UI_WIDTHS = [470, 580, 700]
+UI_HEIGHT_K = [0.70, 1.00, 1.12]     # 高度系数:小=矮一截(内容自动变可滚动)
 UI_SCALE_TEXT = ["小", "中", "大"]
 _UIK = [1.0]                # 保留但恒为 1.0:字号/间距不再随档位缩放
 
@@ -190,14 +191,16 @@ class SettingsWindow(object):
         self._build_body(body)
         self.root.update_idletasks()
         need = self.root.winfo_reqheight()
-        if need > self._wa_h():
+        # 想要的高度 = 内容自然高 × 档位系数(小档故意矮一截 → 自动转成可滚动)
+        want = int(round(need * UI_HEIGHT_K[self.ui_level]))
+        want = int(min(max(want, 360), self._wa_h()))
+        if want < need:                                   # 装不下 → 内容可滚动
             body.destroy()
             self.compact = True
             body = self._body_parent()
             self._build_body(body, with_footer=False)     # 底栏已经建好了,别重复
             self.root.update_idletasks()
-            need = self._wa_h()
-        self.h = int(min(need, self._wa_h()))
+        self.h = want
         self._size = (self._ww(), self.h)
         self._y = max(12, (self._sh - self.h) // 2 - 26)
         self.root.geometry("%dx%d+%d+%d" % (self._ww(), self.h, self._x, self._y))

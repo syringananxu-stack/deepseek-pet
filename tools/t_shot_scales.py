@@ -71,7 +71,7 @@ try:
             continue
         h, t, r = w[0]
         print(name, "rect", (r[2] - r[0], r[3] - r[1]), "client", win32gui.GetClientRect(h))
-        ImageGrab.grab(bbox=(r[0] - 3, r[1] - 3, r[2] + 3, r[3] + 3)).save(
+        ImageGrab.grab(bbox=(r[0] - 18, r[1] - 58, r[2] + 18, r[3] + 18)).save(
             os.path.join(WS, "_sc_%s.png" % name))
         for (h2, _, _) in wins():
             win32gui.PostMessage(h2, win32con.WM_CLOSE, 0, 0)
