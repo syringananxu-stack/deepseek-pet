@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import VERSION
 from . import autostart, balance, config
-from .paths import resource_path
+from .paths import config_dir, resource_path
 
 CHAR_BASE = 250.0
 LEVELS = [0.55, 0.68, 0.82, 1.00, 1.20]
@@ -49,6 +49,16 @@ CALM_INIT = (20, 45)      # 刚启动:先静止多久
 CALM_AFTER = (25, 55)     # 被点/被菜单打扰后
 CALM_AFTER_DRAG = (45, 120)   # 被抓住拖过之后 → 老实很久
 
+# 🥚 隐藏彩蛋:喂进来的东西名字里带 "token"(不分大小写) → 兴奋乱窜+颤抖
+EGG_KEY = "token"
+EGG_SECONDS = (14, 22)      # 兴奋持续多久
+EGG_SPEED_MIN, EGG_SPEED_MAX = 300.0, 460.0
+EGG_TURN = 0.9              # 兴奋时多久换一次方向(秒)—— 长一点才能满屋子窜
+EGG_TREMBLE = 2.6           # 颤抖幅度(像素)
+EGG_LINES = ["token!! token!! 冲鸭!!!", "啊啊啊 token!! 冲冲冲!",
+             "token?! 给我 token!!!", "?!!? token !!! 跑起来了!!!"]
+EGG_DONE = "呼……呼……跑、跑不动了……"
+
 WM_APP_RELOAD = win32con.WM_APP + 1
 
 WS_EX_ACCEPTFILES = 0x00000010
@@ -73,6 +83,12 @@ user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 winmm = ctypes.windll.winmm
 shell32 = ctypes.windll.shell32
+# ⚠️ 64 位下不声明类型,句柄会被当 32 位 int 截断 → 拖放/回收站全静默失效
+shell32.DragQueryFileW.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                   ctypes.c_void_p, ctypes.c_uint]
+shell32.DragQueryFileW.restype = ctypes.c_uint
+shell32.DragFinish.argtypes = [ctypes.c_void_p]
+shell32.SHFileOperationW.restype = ctypes.c_int
 SPI_GETWORKAREA = 0x0030
 
 CHAT = [
@@ -258,6 +274,10 @@ class Pet(object):
         self.chat = self._pick_chat()
         self.chat_until = time.time() + random.uniform(22, 45)
         self._settings_open = False
+        self._egg_until = 0.0          # 🥚 兴奋状态截止时间
+        self._egg_turn_t = 0.0         # 下次换向时间
+        self._egg_line_t = 0.0         # 下次换台词时间
+        self._egg_settle = False       # 兴奋刚结束,需要把颤抖的位移收回来
 
         self.char_src = Image.open(resource_path("DSniang1.png")).convert("RGBA")
         self.snd_press = resource_path("Ya1.mp3")
@@ -284,18 +304,26 @@ class Pet(object):
         if not os.environ.get("DSPET_DEBUG"):
             return
         try:
-            with open(os.path.join(config.config_dir(), "_dbg.log"), "a", encoding="utf-8") as fh:
+            with open(os.path.join(config_dir(), "_dbg.log"), "a", encoding="utf-8") as fh:
                 fh.write("%.3f %s squash=%.3f sqv=%.3f tgt=%.3f drag=%s v=(%.1f,%.1f) pos=(%d,%d)\n"
                          % (time.time() % 100000, tag, self.squash, self.sqv, self.sq_target,
                             self.dragging, self.vx, self.vy, self.x, self.y))
         except Exception:
             pass
 
-    def _init_velocity(self):
-        spd = random.uniform(SPEED_MIN, SPEED_MAX)
+    def _init_velocity(self, egg=False):
+        lo, hi = (EGG_SPEED_MIN, EGG_SPEED_MAX) if egg else (SPEED_MIN, SPEED_MAX)
+        spd = random.uniform(lo, hi)
         ang = random.uniform(0, 2 * math.pi)
         self.vx = spd * math.cos(ang)
         self.vy = spd * 0.62 * math.sin(ang)
+        if egg:                                    # 兴奋:两个方向都要有分量,别贴着边直着跑
+            mn = spd * 0.30
+            if abs(self.vx) < mn:
+                self.vx = mn if self.vx >= 0 else -mn
+            if abs(self.vy) < mn * 0.6:
+                self.vy = mn * 0.6 if self.vy >= 0 else -mn * 0.6
+            return
         if abs(self.vx) < 9.0:
             self.vx = 9.0 if self.vx >= 0 else -9.0
         if abs(self.vy) < 6.0:
@@ -584,6 +612,56 @@ class Pet(object):
             self._impulse(IMP_CLICK * amp * sign)
         self._dbg("bounce pop=%s" % pop)
 
+    # ---------- 🥚 彩蛋:喂进来的名字带 "token" → 兴奋乱窜 ----------
+    def _find_token(self, paths):
+        """看喂进来的东西(文件名 / 文件夹名 / 文件夹里的文件名)带不带 token"""
+        for p in paths:
+            if EGG_KEY in os.path.basename(p).lower():
+                return True
+            if os.path.isdir(p):
+                seen = 0
+                try:
+                    for root, dirs, files in os.walk(p):
+                        for nm in dirs + files:
+                            if EGG_KEY in nm.lower():
+                                return True
+                        seen += len(dirs) + len(files)
+                        if seen > 1500:            # 大目录别把界面卡住
+                            break
+                except Exception:
+                    pass
+        return False
+
+    def _go_egg(self):
+        now = time.time()
+        self._egg_until = now + random.uniform(*EGG_SECONDS)
+        self._egg_turn_t = now
+        self._egg_line_t = now + 2.2
+        self._egg_settle = True
+        self.still_until = 0.0
+        self._moving = True
+        self._init_velocity(egg=True)
+        self.override_txt = random.choice(EGG_LINES)
+        self.override_until = self._egg_until + 5
+        self.info_until = 0.0
+        self.chat_until = self._egg_until + 8
+        self._pop()
+        if self.sounds:
+            threading.Thread(target=self._egg_sounds, daemon=True).start()
+        self._set_tick(TICK_ANIM)
+        self._redraw()
+        self._dbg("token egg!")
+
+    def _egg_sounds(self):
+        try:
+            for _ in range(3):
+                play_sound(self.snd_press)
+                time.sleep(0.55)
+            if self.snd_eat:
+                play_sound(self.snd_eat)
+        except Exception:
+            pass
+
     def _step_wander(self):
         wa = self._wa()
         dt_s = TICK_WALK / 1000.0
@@ -619,13 +697,36 @@ class Pet(object):
         if self._spring_active():
             anim = self._spring_step()
             need = True
-        moving = (self.wander and not self.dragging
-                  and (not self.calm_mode or now >= self.still_until))
+        excited = now < self._egg_until
+        if self._egg_settle and not excited:       # 兴奋刚结束 → 收回颤抖位移,累瘫一会儿
+            self._egg_settle = False
+            self._moving = False
+            self._set_pos(self.fx, self.fy)
+            self._go_calm(CALM_AFTER_DRAG)
+            self.override_txt = EGG_DONE
+            self.override_until = now + OVERRIDE_SECONDS
+            need = True
+        if excited and now - self._egg_line_t > 2.2:     # 兴奋时不停换台词
+            self._egg_line_t = now
+            self.override_txt = random.choice(EGG_LINES)
+            self.override_until = self._egg_until + 5
+            need = True
+        moving = (excited or
+                  (self.wander and not self.dragging
+                   and (not self.calm_mode or now >= self.still_until)))
         if moving and not self._moving:
-            self._init_velocity()          # 歇够了重新出发,顺便换个方向
+            self._init_velocity(egg=excited)   # 歇够了重新出发,顺便换个方向
         self._moving = moving
         if moving:
             self._step_wander()
+        if excited:
+            if now - self._egg_turn_t > EGG_TURN:     # 高频换向 → 满屋乱窜
+                self._egg_turn_t = now
+                self._init_velocity(egg=True)
+            if not self.dragging:                     # 被抓住时不抖(免得跟拖动打架)
+                self._set_pos(self.fx + random.uniform(-EGG_TREMBLE, EGG_TREMBLE),
+                              self.fy + random.uniform(-EGG_TREMBLE, EGG_TREMBLE))
+            need = False
         if now >= self.chat_until and now >= self.info_until and now >= self.override_until:
             self.chat = self._pick_chat()
             self.chat_until = now + random.uniform(22, 45)
@@ -635,7 +736,8 @@ class Pet(object):
         if need:
             self._redraw()
         if not self.dragging:
-            self._set_tick(TICK_ANIM if anim else (TICK_WALK if moving else TICK_IDLE))
+            self._set_tick(TICK_ANIM if (anim or excited)
+                           else (TICK_WALK if moving else TICK_IDLE))
 
     # ---------- 余额 ----------
     def _refresh_once(self):
@@ -725,8 +827,10 @@ class Pet(object):
             if shell32.DragQueryFileW(hdrop, i, buf, 1024):
                 paths.append(buf.value)
         shell32.DragFinish(hdrop)
+        self._dbg("drop n=%s paths=%s" % (n, paths[:2]))
         if not paths:
             return
+        egg = self._find_token(paths)              # 🥚 名字里有 token?
         names = ", ".join(os.path.basename(p) for p in paths[:3])
         more = "" if len(paths) <= 3 else " 等 %d 个" % len(paths)
         where = "彻底删除(不进回收站)" if self.hard_delete else "丢进回收站(可找回)"
@@ -748,6 +852,9 @@ class Pet(object):
                 except Exception:
                     pass
         if ok:
+            if egg and time.time() >= self._egg_until:
+                self._go_egg()                     # 🥚 吃到 token → 兴奋乱窜
+                return
             self.override_txt = ("咔嚓咔嚓——谢谢款待,笨蛋。" if len(paths) == 1
                                  else "咔嚓咔嚓——%d 个都吃掉了,笨蛋。" % len(paths))
             if self.sounds:
@@ -824,23 +931,9 @@ class Pet(object):
 
     # ---------- 菜单 ----------
     def _menu(self):
+        """右键只留两件事:开设置 / 退出(其余设置都进 UI 了)"""
         m = win32gui.CreatePopupMenu()
-        win32gui.AppendMenu(m, win32con.MF_STRING, 20, "设置…(填 API Key / 外观)")
-        win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 1, "看余额 / 峰谷")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 6, "弹一下")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 8, "换一句话")
-        win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 9, "别乱跑(关掉溜达)" if self.wander else "让她溜达(开启)")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 10, "喂文件:直接删除" if not self.hard_delete else "喂文件:丢回收站")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 0, "  (把文件拖到她身上=喂她)")
-        win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 11,
-                            "窗口置顶:开 ✓ (全屏游戏自动让位)" if self.topmost
-                            else "窗口置顶:关 (全屏游戏直接盖住)")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 7, "移到屏幕正下方")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 4, "变小一点" if self.level > 0 else "已是最小")
-        win32gui.AppendMenu(m, win32con.MF_STRING, 5, "变大一点" if self.level < len(LEVELS) - 1 else "已是最大")
+        win32gui.AppendMenu(m, win32con.MF_STRING, 20, "打开设置界面…")
         win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
         win32gui.AppendMenu(m, win32con.MF_STRING, 3, "退出桌宠")
         p = win32gui.GetCursorPos()
@@ -850,54 +943,6 @@ class Pet(object):
 
         if cmd == 20:
             self.open_settings()
-        elif cmd == 1:
-            self.err = ""
-            if not self.key:
-                self.override_txt = "还没填 API Key 呢,笨蛋。右键→设置。"
-                self.override_until = time.time() + 4
-            threading.Thread(target=self._refresh_once, daemon=True).start()
-            self.info_until = time.time() + INFO_SECONDS
-            self._redraw()
-        elif cmd == 6:
-            self._bounce(1.0)
-        elif cmd == 8:
-            self.chat = self._pick_chat()
-            self.chat_until = time.time() + random.uniform(22, 45)
-            self._redraw()
-        elif cmd == 9:
-            self.wander = not self.wander
-            self.override_txt = "哼,人家才不喜欢乱跑呢。" if not self.wander else "好耶,人家要去转转啦~"
-            self.override_until = time.time() + 3
-            self._set_tick(TICK_WALK if self.wander else TICK_IDLE)
-            self._save_cfg()
-            self._redraw()
-        elif cmd == 10:
-            self.hard_delete = not self.hard_delete
-            self._save_cfg()
-        elif cmd == 11:
-            self.topmost = not self.topmost
-            if self.topmost:
-                win32gui.SetWindowPos(self.hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
-                                      win32con.SWP_NOACTIVATE)
-            else:
-                win32gui.SetWindowPos(self.hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
-                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
-                                      win32con.SWP_NOACTIVATE)
-            self._save_cfg()
-        elif cmd == 7:
-            wa = self._wa()
-            self._move_to(wa[0] + (wa[2] - wa[0]) // 2 - self.w // 2, wa[3] - self.h)
-            self._save_cfg()
-            self._redraw()
-        elif cmd == 4 and self.level > 0:
-            self.level -= 1
-            self._save_cfg()
-            self._apply_level()
-        elif cmd == 5 and self.level < len(LEVELS) - 1:
-            self.level += 1
-            self._save_cfg()
-            self._apply_level()
         elif cmd == 3:
             self._save_cfg()
             win32gui.DestroyWindow(self.hwnd)
