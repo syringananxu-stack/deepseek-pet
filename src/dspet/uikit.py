@@ -217,17 +217,17 @@ def switch_frames(on=GREEN, off=TRACK_OFF, w=SWITCH_W, h=SWITCH_H, inset=KNOB_IN
         track = mix(off, on, t)
         L = Layer(W, H)
         # 轨道:灰描边(0.5px,很淡)让"凹槽"有轮廓
-        L.rrect((0.5, 0.5, W - 0.5, H - 0.5), rr, fill=rgb(track) + (255,),
-                outline=(0, 0, 0, 34), width=0.5)
-        # 凹槽感:顶部淡淡的内阴影 + 底部一丝高光
-        L.shadow((0.5, 0.5, W - 0.5, H * 0.55), rr, blur=1.5, dy=0.3, alpha=0.15)
-        L.rrect((1.2, H - 1.8, W - 1.2, H - 0.7), rr, fill=(255, 255, 255, 24))
+        L.rrect((0.4, 0.4, W - 0.4, H - 0.4), rr, fill=rgb(track) + (255,),
+                outline=(0, 0, 0, 68), width=0.6)
+        # 凹槽:只留一丝内阴影(参考 iOS:立体感主要靠描边,不靠阴影)
+        L.shadow((1.0, 1.0, W - 1.0, H * 0.34), rr, blur=1.0, dy=0.2, alpha=0.05)
+        L.rrect((1.6, H - 1.6, W - 1.6, H - 0.9), rr, fill=(255, 255, 255, 16))
         kx = ins + int(round(t * travel))
         cx = kx + dk_ / 2.0
         # 旋钮:轻投影(往下 0.35px,别压太重,免得看着"陷进去")+ 灰描边白块
         L.shadow_circle(cx, cy + 0.4, kr, blur=0.9, alpha=0.26)
-        L.circle(cx, cy, kr, fill=(255, 255, 255, 255), outline=(0, 0, 0, 30),
-                 width=0.6)
+        L.circle(cx, cy, kr, fill=(255, 255, 255, 255), outline=(0, 0, 0, 58),
+                 width=0.7)
         frames.append(L.out())
     _cache[key] = (frames, W + 2 * PAD, H + 2 * PAD)
     return _cache[key]

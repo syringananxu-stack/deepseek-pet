@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""开关:改前 / 改后 对比图(给东家看的那种)"""
+"""开关:改前(上一版) / 改后 对比图 —— 给东家看的"""
 import os
 import sys
 
@@ -14,25 +14,26 @@ WS = os.environ.get("WS", r"C:\Users\admin\.openclaw-desktop\.openclaw\workspace
 Z = 4
 
 
-def old_frames(on=U.GREEN, off=U.TRACK_OFF, w=42, h=24, ins=2):
-    """改前的画法:无描边、旋钮带较重下阴影(所以看着"陷下去")"""
-    from PIL import ImageFilter
+def prev_frames(on=U.GREEN, off=U.TRACK_OFF, w=42, h=24, ins=2):
+    """上一版:内阴影重(alpha .15 / 覆盖 55%)、描边浅(轨道 34 / 旋钮 30)"""
     W, H = w, h
-    dk_ = H - 2 * ins
+    dk_ = H - 2 * ins - 1
     travel = max(1, W - 2 * ins - dk_)
+    rr = (H - 1) / 2.0
+    cy = H / 2.0
+    kr = dk_ / 2.0 - 0.3
     out = []
     for i in range(travel + 1):
         t = i / float(travel)
         L = U.Layer(W, H)
-        L.rrect((0, 0, W - 1, H - 1), (H - 1) / 2.0, fill=U.rgb(U.mix(off, on, t)) + (255,),
-                outline=None)
-        L.shadow((0.5, 0.5, W - 0.5, H * 0.55), (H - 1) / 2.0, blur=1.5, dy=0.3,
-                 alpha=0.16)
-        L.rrect((1.2, H - 1.8, W - 1.2, H - 0.7), (H - 1) / 2.0, fill=(255, 255, 255, 26))
+        L.rrect((0.5, 0.5, W - 0.5, H - 0.5), rr,
+                fill=U.rgb(U.mix(off, on, t)) + (255,), outline=(0, 0, 0, 34), width=0.5)
+        L.shadow((0.5, 0.5, W - 0.5, H * 0.55), rr, blur=1.5, dy=0.3, alpha=0.15)
+        L.rrect((1.2, H - 1.8, W - 1.2, H - 0.7), rr, fill=(255, 255, 255, 24))
         kx = ins + int(round(t * travel))
-        L.shadow((kx, ins, kx + dk_, ins + dk_), dk_ / 2.0, blur=1.1, dy=0.6, alpha=0.30)
-        L.ellipse((kx, ins, kx + dk_, ins + dk_), fill=(255, 255, 255, 255),
-                  outline=(0, 0, 0, 18), width=0.5)
+        cx = kx + dk_ / 2.0
+        L.shadow_circle(cx, cy + 0.4, kr, blur=0.9, alpha=0.26)
+        L.circle(cx, cy, kr, fill=(255, 255, 255, 255), outline=(0, 0, 0, 30), width=0.6)
         out.append(L.out())
     return out
 
@@ -42,18 +43,18 @@ try:
 except Exception:
     f = None
 
-old = old_frames()
+old = prev_frames()
 new, w, h = U.switch_frames()
 picks = (0, len(old) // 2, len(old) - 1)
 
-sheet = Image.new("RGB", (w * Z * 3 + 120, h * Z * 2 + 150), (236, 238, 242))
+sheet = Image.new("RGB", (w * Z * 3 + 140, h * Z * 2 + 150), (236, 238, 242))
 d = ImageDraw.Draw(sheet)
 d.text((14, 10), "改前", fill=(90, 92, 98), font=f)
 d.text((14, 20 + h * Z + 22), "改后", fill=(90, 92, 98), font=f)
-for r, (frames, y) in enumerate(((old, 32), (new, 20 + h * Z + 44))):
+for frames, y in ((old, 32), (new, 20 + h * Z + 44)):
     for i, p in enumerate(picks):
         big = frames[p].resize((frames[p].width * Z, frames[p].height * Z), Image.NEAREST)
-        x = 80 + i * (w * Z + 10)
+        x = 80 + i * (w * Z + 12)
         sheet.paste(big, (x, y), big)
         cy = y + h * Z / 2
         d.line([(x - 6, cy), (x + w * Z + 6, cy)], fill=(255, 0, 128), width=1)
