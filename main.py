@@ -25,7 +25,27 @@ def _log_exception(exc_text):
         pass
 
 
+def _dpi_aware():
+    """高 DPI 适配:per-monitor v2,保证分数缩放下不糊、尺寸正确"""
+    import ctypes
+    try:
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _dpi_aware()
     _bootstrap_path()
     try:
         from dspet.__main__ import main

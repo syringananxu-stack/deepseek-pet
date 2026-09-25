@@ -11,7 +11,21 @@ def _single_instance():
     return h, ctypes.windll.kernel32.GetLastError() != 183
 
 
+def _dpi_aware():
+    """高 DPI 适配:per-monitor v2(打包版走 main.py,这里兜住源码运行)"""
+    import ctypes
+    for fn in (lambda: ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)),
+               lambda: ctypes.windll.shcore.SetProcessDpiAwareness(2),
+               lambda: ctypes.windll.user32.SetProcessDPIAware()):
+        try:
+            fn()
+            return
+        except Exception:
+            continue
+
+
 def main():
+    _dpi_aware()
     _h, first = _single_instance()
     if not first:
         return 0

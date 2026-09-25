@@ -137,7 +137,13 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", wt.DWORD * 3)]
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", RECT), ("rcWork", RECT),
+                ("dwFlags", wt.DWORD)]
+
+
 def work_area():
+    """主显示器可用区(兜底用)"""
     r = RECT()
     try:
         if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(r), 0):
@@ -145,6 +151,41 @@ def work_area():
     except Exception:
         pass
     return 0, 0, user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def monitor_work(hwnd=None):
+    """当前显示器(多屏适配)的可用区:有窗口看窗口,没有看光标在哪块屏"""
+    try:
+        if hwnd:
+            hmon = user32.MonitorFromWindow(hwnd, 2)      # DEFAULTTONEAREST
+        else:
+            pt = wt.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            user32.MonitorFromPoint.argtypes = [wt.POINT, wt.DWORD]
+            user32.MonitorFromPoint.restype = wt.HANDLE
+            hmon = user32.MonitorFromPoint(pt, 2)
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            r = mi.rcWork
+            return r.left, r.top, r.right, r.bottom
+    except Exception:
+        pass
+    return work_area()
+
+
+def dpi_scale(hwnd=None):
+    """系统 DPI 缩放(高 DPI 屏幕下保证她看起来一样大)"""
+    try:
+        dpi = int(user32.GetDpiForWindow(hwnd)) if hwnd else int(user32.GetDpiForSystem())
+        if dpi > 0:
+            return max(0.75, min(2.0, dpi / 96.0))
+    except Exception:
+        pass
+    try:
+        return max(0.75, min(2.0, user32.GetDpiForSystem() / 96.0))
+    except Exception:
+        return 1.0
 
 
 def play_sound(path):
@@ -187,6 +228,7 @@ class Pet(object):
         self.calm_mode = bool(self.cfg.get("calm", True))
         self.still_until = 0.0
         self._moving = False
+        self.dpi = dpi_scale()
 
         self.level = max(0, min(len(LEVELS) - 1, int(self.cfg.get("size_level", 1))))
         self.wander = bool(self.cfg.get("wander", True))
@@ -227,7 +269,13 @@ class Pet(object):
                 break
 
         self._layout()
+        wa = monitor_work()
+        while self.level > 0 and (self.w > (wa[2] - wa[0]) - 16 or
+                                  self.h > (wa[3] - wa[1]) - 16):
+            self.level -= 1
+            self._layout()                      # 屏幕太小 → 自动缩小,别顶出屏幕
         self._create_window()
+        self.squash, self.sqv = -0.45, 0.0      # 出场:先拉伸一下再弹回稳
         self._init_velocity()
         self.still_until = time.time() + self._delay(CALM_INIT)   # 开机先安静待着
 
@@ -309,7 +357,7 @@ class Pet(object):
 
     # ---------- 布局 ----------
     def _layout(self):
-        self.s = LEVELS[self.level]
+        self.s = LEVELS[self.level] * self.dpi
         self.CW = int(CHAR_BASE * self.s)
         self.char = self.char_src.resize((self.CW, self.CW), Image.LANCZOS)
         self.f1 = self._font(24 * self.s, True)
@@ -344,7 +392,7 @@ class Pet(object):
     # ---------- 窗口 ----------
     def _create_window(self):
         w, h = self.w, self.h
-        wa = work_area()
+        wa = monitor_work()
         pos = self.cfg.get("pos") or []
         try:
             self.x = int(pos[0])
@@ -390,14 +438,18 @@ class Pet(object):
         self.fx, self.fy = float(x), float(y)
         self._set_pos(self.fx, self.fy)
 
+    def _wa(self):
+        """所在显示器的可用区(多屏/任务栏都照顾到)"""
+        return monitor_work(getattr(self, "hwnd", None))
+
     def _clamp(self, x, y):
-        wa = work_area()
+        wa = self._wa()
         x = max(wa[0] + 4, min(x, wa[2] - self.w - 4))
         y = max(wa[1] + 4, min(y, wa[3] - self.h - 4))
         return float(x), float(y)
 
     def _snap(self):
-        wa = work_area()
+        wa = self._wa()
         sl, st, sr, sb = wa
         if abs((self.y + self.h) - sb) <= 70:
             self.y = sb - self.h
@@ -533,7 +585,7 @@ class Pet(object):
         self._dbg("bounce pop=%s" % pop)
 
     def _step_wander(self):
-        wa = work_area()
+        wa = self._wa()
         dt_s = TICK_WALK / 1000.0
         nx, ny = self.fx + self.vx * dt_s, self.fy + self.vy * dt_s
         hit = False
@@ -834,7 +886,7 @@ class Pet(object):
                                       win32con.SWP_NOACTIVATE)
             self._save_cfg()
         elif cmd == 7:
-            wa = work_area()
+            wa = self._wa()
             self._move_to(wa[0] + (wa[2] - wa[0]) // 2 - self.w // 2, wa[3] - self.h)
             self._save_cfg()
             self._redraw()
