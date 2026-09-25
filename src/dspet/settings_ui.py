@@ -20,7 +20,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
 
-from . import APP_TITLE, VERSION, autostart, balance, config
+from . import APP_TITLE, VERSION, autostart, balance, config, memopt
 from . import uikit as ui
 from .paths import config_path
 from .uikit import (ACCENT, BG, BORDER, CARD, DANGER, FAINT, GREEN, LINE, SOFT,
@@ -366,10 +366,22 @@ class SettingsWindow(object):
                                  sc=self.sc)
         self.btn_mem.pack(side="right")
         self._mem_busy = False
-        self.lbl_mem = ctk.CTkLabel(card, text="清系统缓存需要管理员权限 —— 会弹一次 UAC,点『是』即可",
-                                    font=_font(10.5), text_color=SUB, anchor="w",
-                                    justify="left", wraplength=int(420 * self.sc))
+        self._mem_hint = "清系统缓存需要管理员权限 —— 会弹一次 UAC,点『是』即可"
+        try:
+            self._mem_now = memopt.lines_now()
+        except Exception:
+            self._mem_now = ""
+        self.lbl_mem = ctk.CTkLabel(card, text=self._mem_text(), font=_font(10.5),
+                                    text_color=SUB, anchor="w", justify="left",
+                                    wraplength=int(420 * self.sc))
         self.lbl_mem.pack(fill="x", padx=_p(16), pady=(_p(7), _p(15)))
+
+    def _mem_text(self):
+        lines = []
+        if getattr(self, "_mem_now", ""):
+            lines.append(self._mem_now)
+        lines.append(getattr(self, "_mem_hint", ""))
+        return "\n".join([ln for ln in lines if ln])
 
     def _mem_optimize(self):
         if self._mem_busy:
@@ -377,8 +389,8 @@ class SettingsWindow(object):
         self._mem_busy = True
         self._mem_result = None
         self.btn_mem.set_text("优化中…")
-        self.lbl_mem.configure(text="正在清理…(若弹出 UAC,请点『是』,不然清不了系统缓存)",
-                               text_color=SUB)
+        self._mem_hint = "正在清理…(若弹出 UAC,请点『是』,不然清不了系统缓存)"
+        self.lbl_mem.configure(text=self._mem_text(), text_color=SUB)
         threading.Thread(target=self._mem_work, daemon=True).start()
         # ⚠️ 结果用主线程轮询取回:从工作线程直接调 tk 的 after 在有些环境会失败
         self._mem_poll()
@@ -387,7 +399,9 @@ class SettingsWindow(object):
         try:
             from . import memopt
             _ok, res = memopt.optimize()
-            self._mem_result = memopt.text_of(res)
+            l1, l2 = memopt.report(res)
+            self._mem_now, self._mem_hint = l1, l2
+            self._mem_result = "%s\n%s" % (l1, l2)
         except Exception as e:                      # 别让 UI 线程炸
             self._mem_result = "失败:%s" % e
 

@@ -226,19 +226,32 @@ def helper_main():
     return 0
 
 
-def text_of(res):
-    """把 optimize 的结果说成人话"""
+def state_line(s):
+    """当前状态一行:总内存 / 已占用 / 可用"""
+    used = s["total"] - s["avail"]
+    return "总内存 %.1f GB · 已占用 %.2f GB · 可用 %.2f GB" % (
+        gb(s["total"]), gb(used), gb(s["avail"]))
+
+
+def lines_now():
+    return state_line(snapshot())
+
+
+def report(res):
+    """结果两行:①总内存/已占用/可用 ②本次释放(含系统缓存前后)"""
     b, a, st = res["before"], res["after"], res["status"]
     freed = max(0, b["cache"] - a["cache"])
-    parts = []
+    l1 = state_line(a)
     if st.get("standby") == STATUS_SUCCESS:
-        if freed > 32 * 1024 * 1024:
-            parts.append("已释放 %.2f GB 缓存" % gb(freed))
-        else:
-            parts.append("内存已优化")
+        l2 = "本次释放 %.2f GB(系统缓存 %.2f → %.2f GB)" % (
+            gb(freed), gb(b["cache"]), gb(a["cache"]))
     elif st.get("msg"):
-        parts.append(st["msg"])
+        l2 = "本次释放 0.00 GB · %s" % st["msg"]
     else:
-        parts.append("待机内存没清掉(需要管理员)")
-    parts.append("可用 %.2f GB · 已缓存 %.2f GB" % (gb(a["avail"]), gb(a["cache"])))
-    return " · ".join(parts)
+        l2 = "本次释放 0.00 GB(清系统缓存需要管理员权限)"
+    return l1, l2
+
+
+def text_of(res):
+    """一行版(给测试/日志用)"""
+    return " · ".join(report(res))
