@@ -14,13 +14,19 @@
 
 数据流:打开读 config → 用户改 → 保存写盘 + 回调通知桌宠主线程重载。
 """
+import os
 import threading
 import tkinter as tk
 
 import customtkinter as ctk
 from PIL import ImageTk
 
-from . import APP_TITLE, VERSION, autostart, balance, config, memopt
+from . import APP_TITLE, VERSION, balance, config
+
+# 轻量版:只保留游玩/观赏/陪伴/看余额
+LITE = os.environ.get("DSPET_EDITION", "") == "lite"
+if not LITE:
+    from . import autostart, memopt
 from . import uikit as ui
 from .paths import config_path
 from .uikit import (ACCENT, BG, BORDER, CARD, DANGER, FAINT, GREEN, LINE, SOFT,
@@ -224,7 +230,8 @@ class SettingsWindow(object):
         self._api_card(body)
         self._behaviour_card(body)
         self._details_card(body)
-        self._toolbox_card(body)
+        if not LITE:
+            self._toolbox_card(body)
         if with_footer:
             self._footer(self._foot_host)
         return body
@@ -271,7 +278,7 @@ class SettingsWindow(object):
         self.var_hide = tk.BooleanVar(value=bool(self.cfg.get("auto_hide_fullscreen", True)))
         self.var_snd = tk.BooleanVar(value=bool(self.cfg.get("sounds", True)))
         self.var_chat = tk.BooleanVar(value=bool(self.cfg.get("chat", True)))
-        self.var_auto = tk.BooleanVar(value=autostart.is_enabled())
+        self.var_auto = tk.BooleanVar(value=(not LITE) and autostart.is_enabled())
 
         rows = [
             ("自主溜达", "没事时自己飘来飘去", self.var_wander),
@@ -282,6 +289,9 @@ class SettingsWindow(object):
             ("碎嘴台词", "气泡里自言自语", self.var_chat),
             ("开机自启", "登录 Windows 后出现", self.var_auto),
         ]
+        if LITE:
+            rows = [r for r in rows if r[2] is not self.var_auto]
+
         grid = ctk.CTkFrame(card, fg_color="transparent")
         grid.pack(fill="x", padx=_p(12), pady=_p(12))
         grid.grid_columnconfigure(0, weight=1, uniform="c")

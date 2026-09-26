@@ -448,7 +448,6 @@ class Segmented(tk.Canvas):
         for t in self._texts:
             self.delete(t)
         self._texts = []
-        n = len(self.values)
         for i, v in enumerate(self.values):
             x = PAD + self._inner * self.sc + self._cw * (i + 0.5)
             y = int(self.cget("height")) / 2.0

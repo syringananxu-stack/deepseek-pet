@@ -1,0 +1,67 @@
+[project]
+name = "deepseek-pet"
+version = "0.4.1"
+description = "DeepSeek 大肥鱼 · 桌面桌宠(Windows 10/11 x64)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+# 版本号以 src/dspet/__init__.py 的 VERSION 为准;这里同步填写仅供工具识别。
+# 发版时两处一起改。
+
+dependencies = [
+    "pywin32>=306",
+    "pillow>=10.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]
+dev = [
+    "ruff==0.16.9",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# ruff:lint 配置
+#   运行: python -m ruff check .
+#   自动修可修项: python -m ruff check --fix .
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 160          # 现有代码有长行(UI 布局/文案);按现状设定,不制造假告警
+target-version = "py310"
+extend-exclude = ["build", "dist", "tools", ".venv"]
+
+[tool.ruff.lint]
+# 起步只开「真问题」规则,不搞风格一刀切(现有代码量大,风格类另议)
+select = [
+    "E4",   # 导入相关
+    "E7",   # 语句问题
+    "E9",   # 语法/IO 错误(真 bug)
+    "F",    # pyflakes:未定义名/未用导入/未用变量(真 bug)
+]
+ignore = [
+    "E402",   # 模块级 import 不在文件顶部 -> 本项目有意为之(LITE 条件导入、sys.path 引导)
+    "F401",   # 未用导入 -> 见 README/AGENTS 说明,暂不强制
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 打包 spec 不是常规 Python 模块
+"build/*.spec" = ["ALL"]
+
+# ---------------------------------------------------------------------------
+# pytest(套件尚未建立;先声明配置,测试落地后生效)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

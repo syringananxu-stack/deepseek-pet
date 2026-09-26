@@ -3,6 +3,8 @@
 import os
 import sys
 
+from . import APP_NAME
+
 
 def is_frozen():
     return bool(getattr(sys, "frozen", False))
