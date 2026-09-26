@@ -16,6 +16,7 @@ import random
 import threading
 import time
 
+import win32api
 import win32con
 import win32gui
 from PIL import Image, ImageDraw, ImageFont
@@ -516,6 +517,25 @@ class Pet(object):
             self.y = st
         if abs((self.x + self.w // 2) - (sl + (sr - sl) // 2)) <= 70:
             self.x = sl + (sr - sl) // 2 - self.w // 2
+
+    def _end_drag(self):
+        """结束拖拽状态(不弹气泡、不刷新余额)。
+
+        用于两种「异常结束」:① WM_MOUSEMOVE 时发现左键已经松开(拿不到
+        WM_LBUTTONUP 的常见情形);② 鼠标捕获被抢 / 光标离开窗口。
+        只把状态复位,若这次确实拖动过(moved)就吸附一下 —— 正常的
+        WM_LBUTTONUP 处理(气泡/余额刷新)不受影响。
+        """
+        if not self.dragging:
+            return
+        self.dragging = False
+        self.sq_target = 0.0
+        if self.moved:
+            self._snap()
+            self._set_pos(self.fx, self.fy)
+            self._save_cfg()
+            self._go_calm(CALM_AFTER_DRAG)
+        self._redraw()
         if abs(self.x - sl) <= 40:
             self.x = sl
         if abs((self.x + self.w) - sr) <= 40:
@@ -1110,7 +1130,16 @@ class Pet(object):
             cx, cy = win32gui.GetCursorPos()
             self.drag_off = (cx - self.x, cy - self.y)
             return 0
-        if msg == win32con.WM_MOUSEMOVE and self.dragging:
+        if msg == win32con.WM_MOUSEMOVE:
+            # 只有真的在拖拽时才动。
+            # ⚠️ 这里必须复查“左键还按着吗”:如果用户在她的窗口上按下左键后,
+            #    快速把鼠标甩出窗口再松开,WM_LBUTTONUP 会发给别的窗口、她收不到,
+            #    于是 dragging 会永远卡在 True —— 表现就是“光标悬停经过她,她就被拖走”。
+            #    GetKeyState(VK_LBUTTON) 高位为 1 = 正按着;没按就立刻结束拖拽。
+            if self.dragging and win32api.GetKeyState(win32con.VK_LBUTTON) >= 0:
+                self._end_drag()
+            if not self.dragging:
+                return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
             cx, cy = win32gui.GetCursorPos()
             nx, ny = cx - self.drag_off[0], cy - self.drag_off[1]
             if abs(nx - self.x) > 2 or abs(ny - self.y) > 2:
@@ -1125,10 +1154,17 @@ class Pet(object):
                 self._last_move_t = tnow
                 self._redraw()
             return 0
+        if msg in (win32con.WM_CAPTURECHANGED, win32con.WM_MOUSELEAVE):
+            # 兜底:鼠标捕获被抢走 / 光标离开窗口 —— 若还在"拖拽中"说明收不到
+            # WM_LBUTTONUP 了,直接结束,免得 dragging 卡住导致后续悬停被拖走。
+            if self.dragging:
+                self._end_drag()
+            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
         if msg == win32con.WM_LBUTTONUP:
+            was_moved = self.moved
             self.dragging = False
             self.sq_target = 0.0
-            if self.moved:
+            if was_moved:
                 self._snap()
                 self._set_pos(self.fx, self.fy)     # 吸附立刻生效,别等下次重绘才跳
                 self._save_cfg()
