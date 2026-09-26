@@ -22,6 +22,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import VERSION
 from . import autostart, balance, config
+
+# 轻量版:不含内存优化
+LITE = os.environ.get("DSPET_EDITION", "") == "lite"
+if not LITE:
+    from . import memopt
 from .paths import config_dir, resource_path
 
 CHAR_BASE = 250.0
@@ -830,6 +835,12 @@ class Pet(object):
 
     # ---------- 喂文件 ----------
     def _files_eat(self, hdrop):
+        if LITE:
+            # 轻量版不含喂文件:只回绝,不弹确认框
+            self.override_txt = "轻量版不吃饭哦~"
+            self.override_until = time.time() + OVERRIDE_SECONDS
+            self._redraw()
+            return
         n = shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
         paths = []
         for i in range(min(n, 20)):

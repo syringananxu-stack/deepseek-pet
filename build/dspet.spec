@@ -36,6 +36,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     icon=os.path.join(PROJ, "dspet.ico"),
+    version=os.path.join(PROJ, "build", "version_info.txt"),
 )
 
 coll = COLLECT(

@@ -16,3 +16,6 @@ _*.png
 _*.bmp
 _*.gif
 _*.txt
+
+# PyInstaller build scratch
+build/_work*/
