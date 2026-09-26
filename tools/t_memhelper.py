@@ -36,7 +36,7 @@ if os.path.exists(J):
         data = {"read_error": str(e)}
 print("结果 json:", data)
 procs = subprocess.run(["tasklist", "/FI", "IMAGENAME eq DeepSeekPet.exe", "/FO", "CSV"],
-                       capture_output=True, text=True).stdout
+                       capture_output=True, text=True, encoding="utf-8", errors="replace").stdout or ""
 n = len([l for l in procs.splitlines()[1:] if l.strip()])
 print("残留进程(应为 0):", n)
 ok = ok_exit and (win32gui.FindWindow("DSPetWnd", None) == 0) and n == 0 and data

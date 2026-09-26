@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
 """内存优化(对标 PCL2「Plain Craft Launcher 2」的内存优化)
 
-做了什么:
-  1. 清空**系统待机内存**(Standby List)——
+安全档(默认,不动任何程序的工作集,基本无感):
+  1. 刷**修改页**(MemoryFlushModifiedList)—— 把脏页落盘,不需要管理员。
+  2. 清空**系统待机内存**(Standby List)——
      `NtSetSystemInformation(SystemMemoryListInformation, MemoryPurgeStandbyList)`
-     这是 PCL2/纯净启动器那类"内存优化"的真正主体,能把系统缓存里 3~10 GB 的
+     这是 PCL2/纯净启动器那类"内存优化"的真正主体,能把系统缓存里几 GB 的
      待机页还回空闲内存池。**需要管理员**(SeProfileSingleProcessPrivilege)。
-  2. 刷**修改页**(MemoryFlushModifiedList)—— 把脏页落盘,不需要管理员。
-  3. (可选)清**工作集**(MemoryEmptyWorkingSets)—— 更狠,所有进程的工作集被清空,
-     程序下次访问要重新缺页,可能会卡一下;PCL2 的"极度"档就是它。默认不开。
+  3. 清**文件系统缓存**(SetSystemFileCacheSize(-1,-1,0))—— 把文件系统缓存页还回
+     空闲池,程序下次读文件重新载入(可接受)。**需要管理员**(SeIncreaseQuotaPrivilege)。
+
+深度档(默认关,勾选后才做):
+  4. 清**工作集**(MemoryEmptyWorkingSets)—— 最狠,所有进程的工作集被清空,
+     程序下次访问要重新缺页,可能会卡一下。适合"真的缺内存"时手动开。
+
+重要认知:待机内存本来就会被 Windows 在程序需要时自动回收,所以清理主要是
+"提前还回"。内存越充裕,能清出的数字越小 —— 这是物理规律,不是 bug。
 
 非管理员时的做法:用 UAC 把自己以 `--mem-purge` 再启动一次(那个实例只干活、不建窗口、
 不抢互斥体),干完就退出,这边等它结束再读内存数字。
@@ -32,6 +39,9 @@ CMD_PURGE_STANDBY_LIST = 4
 
 STATUS_SUCCESS = 0
 STATUS_PRIVILEGE_NOT_HELD = 0xC0000061
+
+# SetSystemFileCacheSize(-1, -1, 0) 的取值:SIZE_T 全 1 = 不设上限(并把缓存页还回)
+_SIZE_T_MAX = ctypes.c_size_t(-1).value
 
 # ---------- 取内存数字 ----------
 
@@ -134,12 +144,31 @@ def _call(cmd):
                                         ctypes.byref(c), 4) & 0xFFFFFFFF
 
 
+def purge_file_cache():
+    """清文件系统缓存:SetSystemFileCacheSize(MAX, MAX, 0)。
+    返回 (ok, err)。需 SeIncreaseQuotaPrivilege(管理员)。
+    失败(错 0/1314)不算致命 —— 只是这步没生效,调用方继续走其他步骤。"""
+    try:
+        kernel32.SetSystemFileCacheSize.argtypes = [ctypes.c_size_t, ctypes.c_size_t,
+                                                    w.DWORD]
+        kernel32.SetSystemFileCacheSize.restype = w.BOOL
+        ctypes.set_last_error(0)
+        ok = kernel32.SetSystemFileCacheSize(_SIZE_T_MAX, _SIZE_T_MAX, 0)
+        return bool(ok), ctypes.get_last_error()
+    except Exception:
+        return False, -1
+
+
 def purge(empty_working_sets=False):
-    """执行清理,返回各步的 NTSTATUS(0=成功)"""
-    enable_privilege()
+    """执行清理,返回各步结果。
+    standby/flush/ws 是 NTSTATUS(0=成功);filecache 是 bool(是否生效)。"""
+    enable_privilege("SeProfileSingleProcessPrivilege")
+    enable_privilege("SeIncreaseQuotaPrivilege")
     out = {"standby": _call(CMD_PURGE_STANDBY_LIST),
            "flush": _call(CMD_FLUSH_MODIFIED_LIST),
            "ws": None}
+    fc_ok, _fc_err = purge_file_cache()
+    out["filecache"] = fc_ok
     if empty_working_sets:
         out["ws"] = _call(CMD_EMPTY_WORKING_SETS)
     return out
@@ -190,12 +219,16 @@ def run_elevated(flag="--mem-purge", timeout=60):
 def optimize(empty_working_sets=False, do_elevate=True):
     """一键内存优化:非管理员时自动弹一次 UAC。返回 (ok, 结果dict)
 
+    empty_working_sets=False → 安全档(不动任何程序工作集)
+    empty_working_sets=True  → 深度档(额外清所有进程工作集,可能卡一下)
+
     重要:UAC 弹窗可能停留好几秒(等用户点“是”),期间内存会自己变。
     所以 **before 必须在真正落刀前一瞬再取** —— 否则前后差里混进了用户看 UAC 的时间。
     """
     if os.environ.get("DSPET_MEMOPT_NOELEVATE"):     # 测试用:不提权
         do_elevate = False
-    st = {"standby": None, "flush": None, "ws": None, "elevated": False, "msg": ""}
+    st = {"standby": None, "flush": None, "filecache": None, "ws": None,
+          "elevated": False, "msg": "", "deep": bool(empty_working_sets)}
     if do_elevate and not is_admin():
         # 非管理员:提权子进程自己取 before/after(它才真正落刀),
         # 从而避开 UAC 等待期间的自然漂移。
@@ -203,13 +236,14 @@ def optimize(empty_working_sets=False, do_elevate=True):
         st["msg"] = msg
         if ok:
             st["elevated"] = True
-            st["standby"] = STATUS_SUCCESS
-            if empty_working_sets:
-                st["ws"] = STATUS_SUCCESS
         # 子进程把 before/after 写在临时 JSON 里,读回来
         sub = _read_helper_json()
         if sub and "before" in sub and "after" in sub:
             before, after = sub["before"], sub["after"]
+            # 把子进程真正执行的成功状态也带回来
+            for k in ("standby", "flush", "filecache", "ws"):
+                if k in sub:
+                    st[k] = sub[k]
         else:
             before = after = snapshot()
             if not ok and msg:
@@ -241,7 +275,6 @@ def helper_main():
     r["after"] = after
     try:
         import json
-        import tempfile
         p = _helper_json_path()
         with open(p, "w", encoding="utf-8") as f:
             f.write(json.dumps(r))
@@ -253,8 +286,6 @@ def helper_main():
 def _helper_json_path():
     import tempfile
     return os.path.join(tempfile.gettempdir(), "dspet_mempurge.json")
-
-
 def _read_helper_json():
     """读提权子进程写的内存快照(不存在/损坏就返回 None)。"""
     try:
@@ -291,9 +322,10 @@ def report(res):
     used_b = b["total"] - b["avail"]
     used_a = a["total"] - a["avail"]
     l1 = state_line(a)
-    if st.get("standby") == STATUS_SUCCESS:
-        l2 = "本次释放 %.2f GB(已用 %.2f → %.2f GB,可用 %.2f → %.2f GB)" % (
-            gb(freed), gb(used_b), gb(used_a), gb(b["avail"]), gb(a["avail"]))
+    if st.get("standby") == STATUS_SUCCESS or st.get("filecache"):
+        tail = "(深度档)" if st.get("deep") else "(安全档)"
+        l2 = "本次释放 %.2f GB %s · 已用 %.2f → %.2f GB,可用 %.2f → %.2f GB" % (
+            gb(freed), tail, gb(used_b), gb(used_a), gb(b["avail"]), gb(a["avail"]))
     elif st.get("msg"):
         l2 = "本次释放 0.00 GB · %s" % st["msg"]
     else:
