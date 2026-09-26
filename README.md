@@ -1,9 +1,20 @@
 # DeepSeek 大肥鱼 · 桌面桌宠 (DeepSeekPet)
 
-<img src="docs/badge.png" width="140" align="right" alt="DeepSeek 大肥鱼">
+<p align="center">
+  <img src="docs/pet-banner.png" width="820" alt="DeepSeek 大肥鱼">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D6?logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  <img src="https://img.shields.io/badge/version-1.0.4-brightgreen" alt="version">
+</p>
 
 一只趴在 Windows 桌面上的小蓝鱼桌宠。会自己溜达、被拎起来会拉长成史莱姆、单击她能看到你
-DeepSeek 账户余额和"高峰/低谷"时段、把文件拖到她身上可以"喂"掉。
+DeepSeek 账户余额和“高峰/低谷”时段、把文件拖到她身上可以“喂”掉。
+
+<img src="docs/pet-cutout.png" width="180" align="right" alt="DeepSeek 大肥鱼">
 
 * **纯本地运行** —— 断网也能用,所有动画和交互都在本机。
 * **唯一的联网点**是查余额时调一次 DeepSeek 官方**只读**接口( `/user/balance` ),
