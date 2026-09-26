@@ -15,7 +15,7 @@ DeepSeek 账户余额和"高峰/低谷"时段、把文件拖到她身上可以"�
 
 ## 一、怎么用(免安装,解压即用)
 
-1. 下载 **`DeepSeekPet-v1.0.1-win64-portable.zip`**,**整个解压到一个自己建的文件夹**里
+1. 下载 **`DeepSeekPet-v1.0.2-win64-portable.zip`**,**整个解压到一个自己建的文件夹**里
    (例如 `D:\Apps\DeepSeekPet\`)。
    * ⚠️ **请整个文件夹一起用,别只把 `DeepSeekPet.exe` 单独拖出来** —— 她还需要旁边的
      `_internal\` 文件夹才能跑(和多数游戏一样:exe + 资源文件夹)。
@@ -93,8 +93,8 @@ python run_dev.py --debug
 
 # 打包:同时产出 单文件版 + 便携版(onedir,推荐分发)
 powershell -ExecutionPolicy Bypass -File build\build.ps1 -Full
-# 产物: dist\DeepSeekPet-v1.0.1-win64.exe          (单文件)
-#       dist\DeepSeekPet-v1.0.1-win64-portable.zip (便携,推荐)
+# 产物: dist\DeepSeekPet-v1.0.2-win64.exe          (单文件)
+#       dist\DeepSeekPet-v1.0.2-win64-portable.zip (便携,推荐)
 ```
 
 依赖:`pywin32`、`pillow`、`numpy`(numpy 只用于把位图快速转成半透明位图,没有会自动降级)。
@@ -104,6 +104,9 @@ powershell -ExecutionPolicy Bypass -File build\build.ps1 -Full
 
 ## 七、更新日志
 
+* **v1.0.2** —— **内存优化增强**:新增「清文件系统缓存」(`SetSystemFileCacheSize`),
+  清理项拆为**安全档**(清待机内存 + 刷修改页 + 清文件缓存,不动任何程序工作集)
+  与**深度档**(额外清各进程工作集,更狠但可能卡顿,默认关);修正 exe 属性里的版本号。
 * **v1.0.1** —— **新增启动自清洁**:每次启动自动清理 `%TEMP%` 下本程序(及同类单文件程序)
   遗留的解包残渣,跳过活动目录、失败静默、写日志。另有配套的每日清理脚本
   (`build/daily_clean.ps1`)。源码仓库结构整理、`.gitignore` 补全。
