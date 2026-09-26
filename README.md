@@ -15,7 +15,7 @@ DeepSeek 账户余额和"高峰/低谷"时段、把文件拖到她身上可以"�
 
 ## 一、怎么用(免安装,解压即用)
 
-1. 下载 **`DeepSeekPet-v1.0.3-win64-portable.zip`**,**整个解压到一个自己建的文件夹**里
+1. 下载 **`DeepSeekPet-v1.0.4-win64-portable.zip`**,**整个解压到一个自己建的文件夹**里
    (例如 `D:\Apps\DeepSeekPet\`)。
    * ⚠️ **请整个文件夹一起用,别只把 `DeepSeekPet.exe` 单独拖出来** —— 她还需要旁边的
      `_internal\` 文件夹才能跑(和多数游戏一样:exe + 资源文件夹)。
@@ -93,8 +93,8 @@ python run_dev.py --debug
 
 # 打包:同时产出 单文件版 + 便携版(onedir,推荐分发)
 powershell -ExecutionPolicy Bypass -File build\build.ps1 -Full
-# 产物: dist\DeepSeekPet-v1.0.3-win64.exe          (单文件)
-#       dist\DeepSeekPet-v1.0.3-win64-portable.zip (便携,推荐)
+# 产物: dist\DeepSeekPet-v1.0.4-win64.exe          (单文件)
+#       dist\DeepSeekPet-v1.0.4-win64-portable.zip (便携,推荐)
 ```
 
 依赖:`pywin32`、`pillow`、`numpy`(numpy 只用于把位图快速转成半透明位图,没有会自动降级)。
@@ -104,6 +104,9 @@ powershell -ExecutionPolicy Bypass -File build\build.ps1 -Full
 
 ## 七、更新日志
 
+* **v1.0.4** —— **右键菜单行高修正**:菜单里的分隔线以前和普通菜单项一样占满整行高,
+  导致两行菜单项之间多出约 11px 的空隙。现在分隔线有独立行高(9px),菜单排布紧凑整齐。
+  (另:同步修正了 exe 文件属性里的版本号,此前一直停留在 1.0.3。)
 * **v1.0.3** —— **修拖拽 bug**:以前在她的窗口上按下左键后如果快速把鼠标甩出窗口再松开,`WM_LBUTTONUP` 会丢失、拖拽状态卡死,导致之后**光标悬停经过她也会把她拖走**。现在每次鼠标移动都会复查左键是否真的按着(`GetKeyState(VK_LBUTTON)`),并加了捕获丢失/离开窗口的兜底,拖拽状态不会再卡住。
 * **v1.0.2** —— **内存优化增强**:新增「清文件系统缓存」(`SetSystemFileCacheSize`),
   清理项拆为**安全档**(清待机内存 + 刷修改页 + 清文件缓存,不动任何程序工作集)
