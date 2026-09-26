@@ -1,21 +1,54 @@
-# 运行期生成,别提交
+# ===== 运行期生成,别提交 =====
 config.json
 dspet.log
 _dbg.log
 
-# 打包产物
+# ===== 打包产物 =====
 dist/
 build/_work/
+build/_work*/
 build/DeepSeekPet/
 __pycache__/
 *.pyc
 *.spec.bak
 
-# 自查/临时脚本产物
+# ===== 自查/临时脚本产物 =====
+_*.log
+_*.err
+_*.out
+_*.txt
 _*.png
 _*.bmp
 _*.gif
-_*.txt
 
-# PyInstaller build scratch
-build/_work*/
+# ===== 临时打包实验(PyInstaller 精简包)=====
+_mini.spec
+_mini2.spec
+_mini_dist/
+_mini_work/
+_mini2_dist/
+_mini2_work/
+_pkg/
+
+# ===== 缓存 =====
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# ===== 素材/截图的临时隔离区(体积大,不提交)=====
+_splashcap/
+_quarantine_unref_assets/
+
+# ===== 内部文档:不公开 =====
+/AGENTS.md
+/HANDOFF-PROMPT.md
+/桌宠项目梳理.md
+
+# ===== 编辑器/系统 =====
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# 临时探针脚本归档(子目录,文件名以 _ 开头)
+tools/_probes/

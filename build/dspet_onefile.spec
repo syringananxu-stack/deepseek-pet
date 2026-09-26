@@ -26,6 +26,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    # 启动画面改为自绘(splashwin.py),不再用 PyInstaller Splash():
+    # 实测 onefile 下 bootloader 解包耗时吃掉了整个启动窗口,且是打包黑盒、难调试。
     a.binaries,
     a.datas,
     [],

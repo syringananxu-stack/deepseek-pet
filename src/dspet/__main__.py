@@ -43,16 +43,52 @@ def main():
         from .memopt import helper_main
         return helper_main()
     _dpi_aware()
+
+    # 启动自清洁:清掉历次单文件运行在 %TEMP% 留下的 _MEI* 解包残渣
+    # (异常退出/强杀/多开时会残留,每份约 80MB,不清会越堆越大)。
+    # 放在建窗口之前、失败静默 —— 绝不拖慢/影响主程序。
+    try:
+        from . import selfclean
+        selfclean.clean_on_startup()
+    except Exception:
+        pass
+
     _h, first = _single_instance()
     if not first:
         return 0
-    from .pet import Pet
+
     from .paths import resource_path
 
     if not os.path.exists(resource_path("DSniang1.png")):
         sys.stderr.write("assets missing: %s\n" % resource_path("DSniang1.png"))
         return 2
-    Pet().start()
+
+    # 自绘启动画面:必须在 import pet(重)之前起,才能盖住加载耗时。
+    # 失败时静默降级,绝不影响主程序。
+    # min_seconds 就是"人为拉长"的总时长 —— 真实加载远快于此,
+    # 这段完全是给观感的(Microsoft Office 那种启动仪式感)。
+    # 横幅启动画面(launcher 风格):整张插画铺满 + 底部渐变叠标题/进度条。
+    # 素材缺失时降级用角色图,再不行才放弃 —— 绝不影响主程序。
+    try:
+        from . import splashwin
+        _banner = resource_path("splash_banner_clean.png")
+        _fallback = resource_path("DSniang1.png")
+        splashwin.start(_banner if os.path.exists(_banner) else _fallback,
+                        min_seconds=3.0, text="正在启动…")
+    except Exception:
+        splashwin = None
+
+    try:
+        from .pet import Pet
+        if splashwin is not None:
+            splashwin.set_progress(0.55, "正在唤醒鱼儿…")
+        Pet().start()
+
+        # Pet().start() 会一直阻塞(跑消息循环),到这里说明窗口已建好、splash 已关。
+    except Exception:
+        if splashwin is not None:
+            splashwin.close()
+        raise
     # ⚠️ 不用 return/sys.exit:tkinter 的守护线程在解释器收尾阶段可能死锁 → 进程会"假活"
     #    (用户看到:关了还在、再开没反应、exe 删不掉)。直接结束进程最干净。
     # ⚠️⚠️ windowed 打包下 sys.stdout 就是 None,别拿它 flush(会 AttributeError → 卡在报错框)

@@ -188,13 +188,17 @@ def run_elevated(flag="--mem-purge", timeout=60):
 
 
 def optimize(empty_working_sets=False, do_elevate=True):
-    """一键内存优化:非管理员时自动弹一次 UAC。返回 (ok, 结果dict)"""
+    """一键内存优化:非管理员时自动弹一次 UAC。返回 (ok, 结果dict)
+
+    重要:UAC 弹窗可能停留好几秒(等用户点“是”),期间内存会自己变。
+    所以 **before 必须在真正落刀前一瞬再取** —— 否则前后差里混进了用户看 UAC 的时间。
+    """
     if os.environ.get("DSPET_MEMOPT_NOELEVATE"):     # 测试用:不提权
         do_elevate = False
-    before = snapshot()
     st = {"standby": None, "flush": None, "ws": None, "elevated": False, "msg": ""}
-    st.update(purge(empty_working_sets))             # 先就地试一把(管理员的话这步就成了)
-    if st["standby"] != STATUS_SUCCESS and do_elevate and not is_admin():
+    if do_elevate and not is_admin():
+        # 非管理员:提权子进程自己取 before/after(它才真正落刀),
+        # 从而避开 UAC 等待期间的自然漂移。
         ok, msg = run_elevated("--mem-purge" + (" --mem-ws" if empty_working_sets else ""))
         st["msg"] = msg
         if ok:
@@ -202,28 +206,66 @@ def optimize(empty_working_sets=False, do_elevate=True):
             st["standby"] = STATUS_SUCCESS
             if empty_working_sets:
                 st["ws"] = STATUS_SUCCESS
-    time.sleep(0.7)
-    after = snapshot()
-    freed = before["cache"] - after["cache"]
-    st["freed"] = freed
+        # 子进程把 before/after 写在临时 JSON 里,读回来
+        sub = _read_helper_json()
+        if sub and "before" in sub and "after" in sub:
+            before, after = sub["before"], sub["after"]
+        else:
+            before = after = snapshot()
+            if not ok and msg:
+                st["standby"] = -1
+    else:
+        # 管理员或就地清:自己取 before → 落刀 → after
+        before = snapshot()
+        st.update(purge(empty_working_sets))
+        time.sleep(0.5)
+        after = snapshot()
+    # 统一口径:释放量 = 可用内存增量(而非系统缓存的减少)
+    st["freed"] = after["avail"] - before["avail"]
     return True, {"before": before, "after": after, "status": st}
 
 
 def helper_main():
-    """`--mem-purge` 模式:提权后的自己只干这一件事,然后退出"""
+    """`--mem-purge` 模式:提权后的自己只干这一件事,然后退出。
+    关键:before/after 都在这里取 —— 它才是真正落刀的那一方,
+    这样前后差只包住清理动作本身,不混进 UAC 等待时间。"""
+    before = snapshot()
     try:
         r = purge("--mem-ws" in sys.argv)
     except Exception:
         r = {"error": True}
+    time.sleep(0.4)
+    after = snapshot()
+    r = dict(r)
+    r["before"] = before
+    r["after"] = after
     try:
         import json
         import tempfile
-        p = os.path.join(tempfile.gettempdir(), "dspet_mempurge.json")
+        p = _helper_json_path()
         with open(p, "w", encoding="utf-8") as f:
             f.write(json.dumps(r))
     except Exception:
         pass
     return 0
+
+
+def _helper_json_path():
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), "dspet_mempurge.json")
+
+
+def _read_helper_json():
+    """读提权子进程写的内存快照(不存在/损坏就返回 None)。"""
+    try:
+        import json
+        p = _helper_json_path()
+        if not os.path.isfile(p):
+            return None
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def state_line(s):
@@ -238,13 +280,20 @@ def lines_now():
 
 
 def report(res):
-    """结果两行:①总内存/已占用/可用 ②本次释放(含系统缓存前后)"""
+    """结果两行:①总内存/已占用/可用 ②本次释放
+
+    口径统一(这是修 bug 的核心):
+      已用 = total - avail        ②释放 = 可用增量 = after.avail - before.avail
+    两者互为相反数 —— 已用降多少,可用就升多少。
+    旧版用「系统缓存的减少」当释放量,和「已用差」是两个口径,所以对不上。"""
     b, a, st = res["before"], res["after"], res["status"]
-    freed = max(0, b["cache"] - a["cache"])
+    freed = a["avail"] - b["avail"]                 # 可用增量(可为负)
+    used_b = b["total"] - b["avail"]
+    used_a = a["total"] - a["avail"]
     l1 = state_line(a)
     if st.get("standby") == STATUS_SUCCESS:
-        l2 = "本次释放 %.2f GB(系统缓存 %.2f → %.2f GB)" % (
-            gb(freed), gb(b["cache"]), gb(a["cache"]))
+        l2 = "本次释放 %.2f GB(已用 %.2f → %.2f GB,可用 %.2f → %.2f GB)" % (
+            gb(freed), gb(used_b), gb(used_a), gb(b["avail"]), gb(a["avail"]))
     elif st.get("msg"):
         l2 = "本次释放 0.00 GB · %s" % st["msg"]
     else:

@@ -34,7 +34,7 @@ LINE = "#E6E7EB"
 BORDER = "#D8DAE0"
 FIELD = "#FFFFFF"
 SOFT = "#E9EBF0"
-SOFT_HOVER = "#E3E5EA"
+SOFT_HOVER = "#DDE0E6"   # 悬停底色:比 BG(#ECEEF2) 明显深一点,否则看不出高亮
 
 SS = 4          # 超采样倍数
 PAD = 4         # 阴影留白(逻辑像素)
@@ -169,12 +169,15 @@ def card_shadow(size, radius=13, blur=7.0, dy=3.0, alpha=0.16, bg=BG):
     return out
 
 
-def card_shadow_strip(width, thickness=9, alpha0=0.13, bg=BG):
-    """卡片正下方的一条柔和投影(顶部最深、向下渐隐),避免整圈阴影带来的白角问题"""
+def card_shadow_strip(width, thickness=9, alpha0=0.13, bg=BG, radius=12):
+    """卡片正下方的一条柔和投影(顶部最深、向下渐隐)。
+    两端必须跟着卡片圆角收窄 —— 否则卡片是圆角、阴影两端是直角,
+    底下会露出一条直边(实测就是"阴影还是直的")。
+    做法:用竖向渐变 × 圆角遮罩(顶端按 radius 收圆),再整体高斯模糊。"""
     w = int(width)
     if w < 8:
         return None
-    key = ("strip", w, thickness, alpha0, bg)
+    key = ("strip", w, thickness, alpha0, bg, radius)
     if key in _cache:
         return _cache[key]
     lay = Image.new("L", (w, thickness), 0)
@@ -182,6 +185,14 @@ def card_shadow_strip(width, thickness=9, alpha0=0.13, bg=BG):
     for y in range(thickness):
         a = int(255 * alpha0 * (1 - y / float(thickness)) ** 1.25)
         d.line([(0, y), (w, y)], fill=a)
+    # 圆角遮罩:两端按卡片圆角"向内收",左右对称。
+    # 做法:画一个满宽、上边在 y=0、下边在 y=thickness+2r 的圆角矩形,
+    # 半径 r,圆角只切到顶部两角 → 顶行两端变淡、中部不变。
+    r = max(4, int(radius))
+    mask = Image.new("L", (w, thickness), 0)
+    md = ImageDraw.Draw(mask)
+    md.rounded_rectangle((0, 0, w - 1, thickness + 2 * r), radius=r, fill=255)
+    lay = Image.composite(lay, Image.new("L", (w, thickness), 0), mask)
     lay = lay.filter(ImageFilter.GaussianBlur(1.6))
     out = Image.new("RGB", (w, thickness), rgb(bg))
     out.paste(Image.new("RGB", (w, thickness), (0, 0, 0)), (0, 0), lay)
@@ -516,6 +527,380 @@ def button_image(width, height, kind="primary", state="normal", sc=1.0, radius=9
     out = L.out()
     _cache[key] = out
     return out
+
+
+# ---------------- 导航图标(SVG 路径 → 高分辨率位图,非汉字) ----------------
+NAV_ICON_PATHS = {
+    # 账号:人像(头 + 肩,用圆弧开口)
+    "account": [
+        ("circle", 12, 8.4, 3.15),
+        ("arc", 5.4, 19.4, 18.6, 19.4, 12, 15.0),
+    ],
+    # 外观与行为:眼睛(椭圆睁开 + 瞳孔)
+    "behaviour": [
+        ("ellipse", 2.6, 8.4, 21.4, 15.6),
+        ("circle", 12, 12.0, 2.25),
+    ],
+    # 细节:三条滑杆带旋钮(调节)
+    "details": [
+        ("line", 3.2, 6.6, 20.8, 6.6),
+        ("circle", 7.6, 6.6, 2.15),
+        ("line", 3.2, 12.0, 20.8, 12.0),
+        ("circle", 16.4, 12.0, 2.15),
+        ("line", 3.2, 17.4, 20.8, 17.4),
+        ("circle", 10.4, 17.4, 2.15),
+    ],
+    # 工具箱:扳手(开口螺环 + 斜柄)
+    "toolbox": [
+        ("circle", 7.6, 7.6, 3.7),
+        ("circle", 9.2, 6.2, 2.5),
+        ("line", 9.6, 10.2, 18.4, 19.0),
+    ],
+    # 卸载:垃圾桶(盖 + 躯干 + 两竖纹)
+    "uninstall": [
+        ("line", 4.2, 6.0, 19.8, 6.0),
+        ("line", 9.4, 3.2, 14.6, 3.2),
+        ("rrect", 5.6, 8.2, 18.4, 20.6),
+        ("line", 9.4, 11.0, 9.4, 17.6),
+        ("line", 14.6, 11.0, 14.6, 17.6),
+    ],
+}
+
+
+def _icon_image(name, size, color, width, sc=1.0):
+    """把 NAV_ICON_PATHS 里的 SVG 路径渲染成透明底 RGBA 位图(4x 超采样,丝滑)"""
+    W = max(4, int(round(size * sc)))
+    key = ("navicon", name, W, color, width)
+    if key in _cache:
+        return _cache[key]
+    S = W * SS
+    k = S / 24.0
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    col = rgb(color) + (255,)
+    lw = max(1, int(round(width * k)))
+    for prim in NAV_ICON_PATHS.get(name, []):
+        t = prim[0]
+        if t == "line":
+            d.line([(prim[1] * k, prim[2] * k), (prim[3] * k, prim[4] * k)],
+                   fill=col, width=lw)
+        elif t == "circle":
+            cx, cy, r = prim[1] * k, prim[2] * k, prim[3] * k
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col)
+        elif t == "ellipse":
+            d.ellipse([prim[1] * k, prim[2] * k, prim[3] * k, prim[4] * k],
+                      outline=col, width=lw)
+        elif t == "rrect":
+            d.rounded_rectangle([prim[1] * k, prim[2] * k, prim[3] * k, prim[4] * k],
+                                radius=1.6 * k, outline=col, width=lw)
+        elif t == "arc":
+            d.arc([prim[1] * k, prim[2] * k, prim[3] * k, prim[4] * k],
+                  prim[5], prim[6], fill=col, width=lw)
+    out = img.resize((W, W), Image.Resampling.LANCZOS)
+    _cache[key] = out
+    return out
+
+
+def icon_image(name, size, color, width=1.9, sc=1.0):
+    W = max(4, int(round(size * sc)))
+    key = ("navphoto", name, W, color, width)
+    if key in _cache:
+        return _cache[key]
+    img = _icon_image(name, size, color, width, sc)
+    ph = ImageTk.PhotoImage(img)
+    _cache[key] = ph
+    return ph
+
+
+# ---------------- 导航按钮(PCL 风格左侧栏目) ----------------
+def navbutton_image(width, height, state="normal", sc=1.0, radius=8, bar=False,
+                    alpha=1.0):
+    """state: normal | hover | active
+
+    PCL 风：**常态不画底色**(与面板融为一体,没有白卡片/硬边/坏块),
+    悬停给一层极淡的灰,选中给实心强调色。alpha 供展开/收起时淡入淡出。"""
+    W, H = int(round(width * sc)), int(round(height * sc))
+    rad = int(round(radius * sc))
+    a01 = max(0.0, min(1.0, float(alpha)))
+    key = ("nav", W, H, state, radius, round(a01, 3))
+    if key in _cache:
+        return _cache[key]
+    L = Layer(W, H)
+    if state == "active":
+        L.gradient_rrect((0, 0, W - 1, H - 1), rad, shade(ACCENT, 0.10),
+                         shade(ACCENT, -0.02))
+    elif state == "hover":
+        # 悬停:极淡灰底,无描边
+        L.rrect((0, 0, W - 1, H - 1), rad, fill=rgb(SOFT_HOVER) + (255,))
+    else:
+        # 常态:完全透明(不画任何底) —— 这才是 PCL 的“平”
+        pass
+    out = L.out()
+    if a01 < 0.999:
+        out = out.copy()
+        out.putalpha(out.getchannel("A").point(lambda v: int(v * a01)))
+    _cache[key] = out
+    return out
+
+
+class NavButton(tk.Canvas):
+    """左侧导航栏按钮。两种形态:
+      * 固定态(icon-only):只画图标,方形小钮,不随悬停变宽(导航栏固定不动)
+      * 悬停态:光标移上时向左展开成"条",显示图标 + 文字
+    选中态为实心强调色(图标/文字转白)。
+    展开/收起是动画:由栏驱动 bar.set_wide(t),t∈[0,1] 逐帧插值,
+    图标左移、文字淡入(用 fill 颜色混色模拟透明度)。
+    """
+
+    def __init__(self, master, text, command=None, bg=BG, width=132, height=38,
+                 font=None, sc=None, radius=9, icon=None, compact_w=44,
+                 icon_size=20, expanding=True):
+        sc = sc or scale_of(master)
+        self.sc, self.command, self.font = sc, command, font
+        self._cw, self._ch, self.radius = width, height, radius
+        self._compact_w = compact_w
+        self._expanding = expanding
+        self._icon = icon
+        self._icon_size = icon_size
+        self._active = False
+        self._hover = False
+        self._text = text
+        super().__init__(master, width=int(width * sc) + 2 * PAD,
+                         height=int(height * sc) + 2 * PAD, bg=bg, bd=0,
+                         highlightthickness=0, cursor="hand2")
+        self._imgs = {s: photo(navbutton_image(width, height, s, sc, radius,
+                                               alpha=0.0 if s == "normal" else 1.0), None)
+                      for s in ("normal", "hover", "active")}
+        self._cur = "normal"
+        # 图标(非汉字):固定态水平居中,展开态靠左
+        self._icid = None
+        self._ic_ph = None
+        if icon:
+            cw = int(compact_w * sc) / 2.0 + PAD
+            self._icid = self.create_image(cw, PAD + int(height * sc) / 2.0,
+                                           anchor="center")
+        # 图标位图缓存(构造时生成一次;之后每帧只 itemconfig)
+        self._build_icon_cache()
+        if icon:
+            self._ic_ph = self._icon_cache.get("normal")
+            self.itemconfig(self._icid, image=self._ic_ph)
+        self._tid = self.create_text(PAD + int(width * sc) / 2.0,
+                                     PAD + int(height * sc) / 2.0, text=text,
+                                     fill=TEXT, font=self.font, anchor="center")
+        # 活动/悬停底图:预渲染帧表,动画时只查表(见 _bg_frames_build)
+        from PIL import Image, ImageTk
+        self._bg_tk = ImageTk.PhotoImage(Image.new("RGBA", (1, 1), (0, 0, 0, 0)))
+        self._bg_cap = None
+        self._bg_frames = {}
+        self._bgid = self.create_image(PAD, PAD, anchor="nw", image=self._bg_tk)
+        self._bg_shown = 0.0
+        self._bg_frames_build()
+        self._t = 0.0        # 当前动画进度 0=收起 1=展开
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonRelease-1>", self._release)
+
+    def _icon_photo(self, col):
+        return icon_image(self._icon, self._icon_size, col, 1.9, self.sc)
+
+    def _icon_color(self):
+        return "#FFFFFF" if self._active else (ACCENT if self._hover else SUB)
+
+    def _build_icon_cache(self):
+        """预生成三种状态的图标位图缓存。
+        每帧都现场调 icon_image 会拖慢动画(每帧几十 ms、只够 2 帧),
+        所以缓存后每帧只做 itemconfig。"""
+        if not self._icon:
+            self._icon_cache = {}
+            return
+        self._icon_cache = {
+            "normal": self._icon_photo(SUB),
+            "hover": self._icon_photo(ACCENT),
+            "active": self._icon_photo("#FFFFFF"),
+        }
+
+    def _repaint_icon(self):
+        if not self._icon:
+            return
+        s = "active" if self._active else ("hover" if self._hover else "normal")
+        ph = self._icon_cache.get(s)
+        if ph is not None and self._ic_ph is not ph:
+            self._ic_ph = ph
+            self.itemconfig(self._icid, image=ph)
+
+    def set_wide(self, t):
+        """栏动画逐帧回调:t∈[0,1],0=收起 1=展开。
+        图标位置、文字淡入都按 t 插值——比布尔开关流畅得多。"""
+        try:
+            t = max(0.0, min(1.0, float(t)))
+        except Exception:
+            t = 1.0 if t else 0.0
+        self._t = t
+        self._reflect()
+
+    def _bg_frames_build(self):
+        """预渲染底图的所有帧(状态 × 宽度档 × 透明度档)。
+        动画时只做 dict 查表 + itemconfig —— 绝不在帧里做 PIL 裁剪/重采样,
+        那是之前每两三帧卡 80~90ms、动画只有 5~6 帧的根因。"""
+        from PIL import Image
+        self._bg_frames = {}
+        W = int(self._cw * self.sc)
+        NA, NW = 8, 14   # 透明度 8 档、宽度 14 档
+        for s in ("active", "hover"):
+            full = navbutton_image(self._cw, self._ch, s, self.sc, self.radius)
+            fh = full.height
+            for iw in range(NW + 1):
+                t = iw / float(NW)
+                w = int(round(W * (0.28 + 0.72 * t)))
+                w = max(2, min(W, w))
+                if w >= W:
+                    # 满宽:直接用完整圆角图,不能裁 —— 裁会切平右端
+                    cropped = full
+                else:
+                    # 窄于满宽:盖一层圆角遮罩,让右端跟着圆角收圆(而非直角切口)
+                    cropped = full.crop((0, 0, w + 2 * PAD, fh)).copy()
+                    m = Image.new("L", cropped.size, 0)
+                    ImageDraw.Draw(m).rounded_rectangle(
+                        (0, 0, cropped.size[0] - 1, cropped.size[1] - 1),
+                        radius=max(2, int(self.radius * self.sc) + PAD), fill=255)
+                    cropped.putalpha(
+                        cropped.getchannel("A").point(lambda v: v).convert("L"))
+                    a0 = cropped.getchannel("A")
+                    a1 = Image.composite(a0, Image.new("L", cropped.size, 0), m)
+                    cropped.putalpha(a1)
+                for ia in range(NA + 1):
+                    a = ia / float(NA)
+                    if a <= 0.001:
+                        continue
+                    im = cropped.copy()
+                    im.putalpha(im.getchannel("A").point(
+                        lambda v, aa=a: int(v * aa)))
+                    key = (s, iw, ia)
+                    self._bg_frames[key] = photo(im, None)
+
+    def _paint_bg(self, s, a, t):
+        """画活动/悬停底图:宽度随 t 伸展、透明度随 a 淡入。
+        只查预渲染表,不在帧里做图像处理(否则帧率崩)。"""
+        if s == "normal" or a <= 0.001:
+            # ⚠️ 必须连 _bg_cap 一起清掉!
+            #    否则:悬停过→离开(隐藏)→再悬停时算出的 key 与残留的
+            #    _bg_cap 相同 → 命中缓存直接 return → 底图永远不再显示。
+            #    (东家反馈的"高亮还是有 bug"就是这个:第一次能亮,移开再回来就不亮)
+            self._bg_cap = None
+            if self._bg_shown != 0.0:
+                self._bg_shown = 0.0
+                self.itemconfig(self._bgid, state="hidden")
+            return
+        NA, NW = 8, 14
+        iw = int(round(max(0.0, min(1.0, t)) * NW))
+        ia = int(round(max(0.0, min(1.0, a)) * NA))
+        key = (s, iw, ia)
+        if getattr(self, "_bg_cap", None) == key:
+            return
+        ph = self._bg_frames.get(key)
+        if ph is None:
+            return
+        self._bg_cap = key
+        self._bg_tk = ph
+        self._bg_shown = a
+        self.itemconfig(self._bgid, image=ph, state="normal")
+
+    def _reflect(self):
+        """根据动画进度 t + 本项(悬停/选中)重排背景、图标位置与文字淡入。
+        常态完全无底色(PCL 平),悬停/选中才画底色,且随 t 淡入——
+        收起时底色跟着消失,不留任何白卡片/硬边。"""
+        s = "active" if self._active else ("hover" if self._hover else "normal")
+        self._cur = s
+        t = getattr(self, "_t", 0.0)
+        # 底图:淡入随 t 前段,宽度随 t 后段几乎同步(避免半截硬块)
+        if s == "normal":
+            a = 0.0
+        else:
+            a = min(1.0, t / 0.6)
+        self._paint_bg(s, a, t)
+        H = int(self._ch * self.sc)
+        cy = PAD + H / 2.0
+        # 底图是后画的,必须把图标/文字抬到它上面,否则被蓝块盖住(空蓝块)
+        try:
+            self.tag_raise(self._icid)
+            self.tag_raise(self._tid)
+        except Exception:
+            pass
+        if self._icon and self._expanding:
+            # 图标从居中位置线性左移到展开位
+            x0 = int(self._compact_w * self.sc) / 2.0 + PAD
+            x1 = PAD + int(15 * self.sc)
+            self.coords(self._icid, x0 + (x1 - x0) * t, cy)
+            tx = PAD + int(31 * self.sc)
+            self.coords(self._tid, tx, cy)
+            if t > 0.55:
+                # 文字淡入:t 0.55→1 映射到透明度 0→1(前景色向目标色混)
+                a = (t - 0.55) / 0.45
+                base = "#FFFFFF" if self._active else TEXT
+                fill = self._blend(bg=(ACCENT if self._active else "#FFFFFF"),
+                                   fg=base, k=a)
+                self.itemconfig(self._tid, anchor="w", state="normal", fill=fill)
+            else:
+                self.itemconfig(self._tid, state="hidden")
+        elif self._icon:
+            self.coords(self._icid, PAD + int(15 * self.sc), cy)
+            self.coords(self._tid, PAD + int(31 * self.sc), cy)
+            self.itemconfig(self._tid, anchor="w", state="normal",
+                            fill="#FFFFFF" if self._active else TEXT)
+        else:
+            self.itemconfig(self._tid, state="normal", anchor="center",
+                            fill="#FFFFFF" if self._active else TEXT)
+        self._repaint_icon()
+
+    @staticmethod
+    def _blend(bg, fg, k):
+        """把 fg 按 k 叠到 bg 上(k=0 完全 bg,k=1 完全 fg)———模拟淡入"""
+        try:
+            b = tuple(int(bg[i:i + 2], 16) for i in (1, 3, 5))
+            f = tuple(int(fg[i:i + 2], 16) for i in (1, 3, 5))
+            mix = tuple(int(round(b[i] + (f[i] - b[i]) * k)) for i in range(3))
+            return "#%02X%02X%02X" % mix
+        except Exception:
+            return fg
+
+    def _on_enter(self, e):
+        self._hover = True
+        self._reflect()
+        self._expand()
+
+    def _on_leave(self, e):
+        self._hover = False
+        self._reflect()
+        self._compress()
+
+    def _release(self, e):
+        inside = 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height()
+        if inside and self.command:
+            try:
+                self.command()
+            except Exception:
+                pass
+        self._reflect()
+
+    # ---- 悬停展开 / 收起 ----
+    def _expand(self):
+        cb = getattr(self.master, "on_nav_hover", None)
+        if cb:
+            cb(True)
+
+    def _compress(self):
+        cb = getattr(self.master, "on_nav_hover", None)
+        if cb:
+            cb(False)
+
+    def _state(self, s):
+        # 兼容旧调用:只改悬停/常态
+        self._hover = (s == "hover")
+        self._reflect()
+
+    def set_active(self, on):
+        self._active = bool(on)
+        self._reflect()
 
 
 class Button(tk.Canvas):

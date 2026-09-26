@@ -30,12 +30,27 @@ if not LITE:
 
 from .paths import config_dir, resource_path
 
+# 自绘启动画面句柄(见 splashwin.py);源码与打包都可用,失败时为 None
+splashwin = None
+try:
+    from . import splashwin  # noqa: F401
+except Exception:
+    splashwin = None
+
+SPLASH_MIN_SECONDS = 3.0    # splash 总展示时长(人为拉长,观感优先)
+_SPLASH_HARD_TIMEOUT = 8.0  # splash 卡死兜底:最多等这么久就强亮桌宠
+
 CHAR_BASE = 250.0
 LEVELS = [0.55, 0.68, 0.82, 1.00, 1.20]
 
 TICK_IDLE = 500
 TICK_WALK = 20
 TICK_ANIM = 20
+
+# splash 专用计时器 id(与 _set_tick 用的 1 号计时器错开)
+_SPLASH_TIMER_ID = 2
+_SPLASH_WAIT_TIMER_ID = 3   # "等 splash 播完"轮询计时器
+_SPLASH_T0 = time.time()    # 模块导入即计时,近似进程启动时刻
 
 INFO_SECONDS = 10          # 点一下看余额/倒计时,给足时间看完(以前 5 秒,倒计时还没看明白就没了)
 OVERRIDE_SECONDS = 4
@@ -282,6 +297,8 @@ class Pet(object):
         self.chat = self._pick_chat()
         self.chat_until = time.time() + random.uniform(22, 45)
         self._settings_open = False
+        self._pet_shown = False        # 桌宠窗口是否已出现在屏幕上(等 splash 播完才亮)
+        self._splash_wait_t0 = 0.0     # "等 splash 播完"计时起点
         self._egg_until = 0.0          # 🥚 兴奋状态截止时间
         self._egg_turn_t = 0.0         # 下次换向时间
         self._egg_line_t = 0.0         # 下次换台词时间
@@ -303,6 +320,7 @@ class Pet(object):
             self.level -= 1
             self._layout()                      # 屏幕太小 → 自动缩小,别顶出屏幕
         self._create_window()
+        self._show_pet_after_splash()   # 启动画面播完之前,桌宠窗口先藏着
         self.squash, self.sqv = -0.45, 0.0      # 出场:先拉伸一下再弹回稳
         self._init_velocity()
         self.still_until = time.time() + self._delay(CALM_INIT)   # 开机先安静待着
@@ -457,7 +475,10 @@ class Pet(object):
             shell32.DragAcceptFiles(self.hwnd, True)
         except Exception:
             pass
-        win32gui.ShowWindow(self.hwnd, win32con.SW_SHOW)
+        # ⚠️ 窗口建好但**先不显示**。
+        #    splash 要完整播满 min_seconds,之后才由 _show_pet_after_splash() 亮脸。
+        #    (以前在这里直接 ShowWindow + 立刻关 splash,导致"splash 一闪而过"和
+        #     "黑块没结束桌宠就出现"两个 bug 同时存在 —— 现在两者都交给时序控制器。)
         self._pos_valid = True
         self._redraw()
 
@@ -824,6 +845,11 @@ class Pet(object):
 
     def _show_back(self):
         self._hidden = False
+        # ⚠️ 启动阶段(splash 还没播完)不能被这个后台线程提前亮脸;
+        #    否则 _fullscreen_loop 0.8 秒一次的巡检会绕过 _pet_shown 守卫,
+        #    把还没到点该出现的桌宠提前显示出来。统一交给 _reveal_pet() 负责。
+        if splashwin is not None and not self._pet_shown:
+            return
         if self.topmost:
             win32gui.SetWindowPos(self.hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
                                   win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
@@ -998,15 +1024,30 @@ class Pet(object):
                                   win32con.SWP_NOACTIVATE | win32con.SWP_NOSENDCHANGING)
         except Exception:
             pass
+        cmd = None
         try:
-            m = win32gui.CreatePopupMenu()
-            win32gui.AppendMenu(m, win32con.MF_STRING, 20, "打开设置界面…")
-            win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
-            win32gui.AppendMenu(m, win32con.MF_STRING, 3, "退出桌宠")
-            p = win32gui.GetCursorPos()
-            cmd = win32gui.TrackPopupMenu(m, win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
-                                          p[0], p[1], 0, self.hwnd, None)
-            win32gui.DestroyMenu(m)
+            from . import menuwin
+            items = [
+                menuwin.Item(20, "打开设置界面", icon="gear"),
+                menuwin.Item(0, "", kind="sep"),
+                menuwin.Item(3, "退出桌宠", icon="power", kind="danger"),
+            ]
+            cmd = menuwin.MenuWindow(items, owner_hwnd=self.hwnd,
+                                     sc=float(self.dpi or 1.0)).run()
+        except Exception:
+            # 自绘菜单起不来 → 退回原生菜单(宁可丑,不能没菜单)
+            try:
+                m = win32gui.CreatePopupMenu()
+                win32gui.AppendMenu(m, win32con.MF_STRING, 20, "打开设置界面…")
+                win32gui.AppendMenu(m, win32con.MF_SEPARATOR, 0, "")
+                win32gui.AppendMenu(m, win32con.MF_STRING, 3, "退出桌宠")
+                p = win32gui.GetCursorPos()
+                cmd = win32gui.TrackPopupMenu(
+                    m, win32con.TPM_RETURNCMD | win32con.TPM_RIGHTBUTTON,
+                    p[0], p[1], 0, self.hwnd, None)
+                win32gui.DestroyMenu(m)
+            except Exception:
+                cmd = None
         finally:
             self._menu_open = False
             if self.topmost:
@@ -1027,6 +1068,16 @@ class Pet(object):
     # ---------- 窗口消息 ----------
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == win32con.WM_TIMER:
+            if wparam == _SPLASH_TIMER_ID:
+                user32.KillTimer(hwnd, _SPLASH_TIMER_ID)
+                self._do_close_splash()
+                return 0
+            if wparam == _SPLASH_WAIT_TIMER_ID:
+                # 等 splash 播完;它自己关掉后就亮桌宠。超时兜底防卡死。
+                if (splashwin is None or not splashwin.is_active()
+                        or time.time() - self._splash_wait_t0 >= _SPLASH_HARD_TIMEOUT):
+                    self._reveal_pet()
+                return 0
             try:
                 self._on_tick()
             except Exception:
@@ -1123,3 +1174,69 @@ class Pet(object):
             self.override_until = time.time() + OVERRIDE_SECONDS * 3
         self._dbg("start v%s" % VERSION)
         win32gui.PumpMessages()
+
+    def _close_splash(self):
+        """关掉自绘启动画面(未启动时静默跳过)。
+
+        splash 至少展示 SPLASH_MIN_SECONDS(现在是人为拉长的 3 秒),
+        用 after 调度而不是 sleep:期间消息循环照常跑,窗口不会假死。
+
+        ⚠️ 真实路径不走这里 —— 桌宠窗口显示前会调 _close_splash_now()
+        立刻关掉(不重叠优先)。保留它是为了异常/降级路径不留下幽灵窗口。
+        """
+        if splashwin is None:
+            return
+        delay_ms = int(max(0.0, SPLASH_MIN_SECONDS - (time.time() - _SPLASH_T0)) * 1000)
+        user32.SetTimer(self.hwnd, _SPLASH_TIMER_ID, max(1, delay_ms), None)
+
+    def _show_pet_after_splash(self):
+        """等 splash 播完 -> 关 splash -> 再显示桌宠窗口(绝不重叠)。
+
+        设计:
+          - 桌宠窗口在 _create_window() 里已经建好,但**没显示**;
+          - 这里用 SetTimer 轮询,Splash 也不在屏幕上时(或超时兜底),
+            才 ShowWindow —— 这样 splash 能完整播满 min_seconds。
+          - 超时兜底 _SPLASH_HARD_TIMEOUT 防止 splash 卡死导致桌宠永不出现。
+        """
+        if splashwin is None:
+            self._reveal_pet()
+            return
+        self._splash_wait_t0 = time.time()
+        user32.SetTimer(self.hwnd, _SPLASH_WAIT_TIMER_ID, 60, None)
+
+    def _reveal_pet(self):
+        """真正让桌宠窗口出现在屏幕上(只做一次)。"""
+        if self._pet_shown:
+            return
+        self._pet_shown = True
+        user32.KillTimer(self.hwnd, _SPLASH_WAIT_TIMER_ID)
+        self._close_splash_now()
+        try:
+            win32gui.ShowWindow(self.hwnd, win32con.SW_SHOW)
+        except Exception:
+            pass
+        self._redraw()
+
+    def _close_splash_now(self):
+        """立即关闭启动画面,不做最短展示等待。
+
+        用于"桌宠窗口即将显示"这一刻:必须保证 splash 先消失,
+        否则两者同屏重叠。最短展示时长由 __main__ 里的加载耗时自然满足;
+        这里以"不重叠"为最高优先级。
+        """
+        if splashwin is None:
+            return
+        try:
+            splashwin.close_now()
+        except Exception:
+            pass
+
+    def _do_close_splash(self):
+        """真正关闭启动画面(在主线消息循环里调用,此刻窗口已就绪)"""
+        if splashwin is None:
+            return
+        try:
+            splashwin.close()
+            self._dbg("splash closed")
+        except Exception:
+            pass
