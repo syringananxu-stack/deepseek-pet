@@ -21,12 +21,13 @@ import win32gui
 from PIL import Image, ImageDraw, ImageFont
 
 from . import VERSION
-from . import autostart, balance, config
+from . import balance, config
 
 # 轻量版:不含内存优化
 LITE = os.environ.get("DSPET_EDITION", "") == "lite"
 if not LITE:
     from . import memopt
+
 from .paths import config_dir, resource_path
 
 CHAR_BASE = 250.0
