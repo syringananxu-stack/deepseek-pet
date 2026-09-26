@@ -26,7 +26,7 @@ from . import balance, config
 # 轻量版:不含内存优化
 LITE = os.environ.get("DSPET_EDITION", "") == "lite"
 if not LITE:
-    from . import memopt
+    from . import memopt  # noqa: F401  (确保完全版打包时把 memopt 拉进 bundle)
 
 from .paths import config_dir, resource_path
 

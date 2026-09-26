@@ -29,8 +29,7 @@ if not LITE:
     from . import autostart, memopt
 from . import uikit as ui
 from .paths import config_path
-from .uikit import (ACCENT, BG, BORDER, CARD, DANGER, FAINT, GREEN, LINE, SOFT,
-                    SUB, TEXT)
+from .uikit import (BG, CARD, DANGER, FAINT, GREEN, SUB, TEXT)
 
 W, H = 580, 800
 _SESSION = {}

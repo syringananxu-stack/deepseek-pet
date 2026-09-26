@@ -1,13 +1,10 @@
 [project]
 name = "deepseek-pet"
-version = "0.4.1"
+dynamic = ["version"]          # 版本号单一来源:src/dspet/__init__.py 的 VERSION
 description = "DeepSeek 大肥鱼 · 桌面桌宠(Windows 10/11 x64)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
-
-# 版本号以 src/dspet/__init__.py 的 VERSION 为准;这里同步填写仅供工具识别。
-# 发版时两处一起改。
 
 dependencies = [
     "pywin32>=306",
@@ -32,6 +29,9 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { attr = "dspet.VERSION" }
+
 # ---------------------------------------------------------------------------
 # ruff:lint 配置
 #   运行: python -m ruff check .
@@ -52,7 +52,6 @@ select = [
 ]
 ignore = [
     "E402",   # 模块级 import 不在文件顶部 -> 本项目有意为之(LITE 条件导入、sys.path 引导)
-    "F401",   # 未用导入 -> 见 README/AGENTS 说明,暂不强制
 ]
 
 [tool.ruff.lint.per-file-ignores]
