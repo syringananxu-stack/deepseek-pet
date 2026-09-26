@@ -35,7 +35,10 @@ from . import uikit
 
 # ---- 尺寸(逻辑像素,DPI 缩放另算;东家要求:再小、圆角小、字小) ----
 W = 116               # 卡片宽
-ITEM_H = 20           # 每个菜单项高(东家:太高,原 24 我误改 29,现压到 20)
+ITEM_H = 20           # 普通菜单项高(东家:太高,原 24 我误改 29,现压到 20)
+SEP_H = 9             # 分隔线行的行高(东家:上下两行字之间空隙过大)
+                      #   旧版 sep 跟普通项一样占满 ITEM_H(20),但只画 1px 细线,
+                      #   白留 19px → 看就是"两行字离得太开"。单独给个小行高。
 PAD_V = 3             # 卡片上下内边距
 GAP = 7               # 阴影留白(画布四周)
 ICON = 11             # 图标方框边长
@@ -108,18 +111,31 @@ def _mix(c1, c2, k):
     return "#%02x%02x%02x" % tuple(int(round(a[i] + (b[i] - a[i]) * k)) for i in range(3))
 
 
-def menu_size(sc=1.0, n=None):
-    """(卡片宽, 卡片高, 阴影留白) —— 单位:物理像素"""
-    n = 1 if n is None else n
+def _row_hs(items, sc=1.0):
+    """每一项的行高(逻辑像素列表):分隔线用 SEP_H,其余用 ITEM_H。
+
+    这样菜单卡片总高不再把分隔线当整行算,两行字之间不会多出 ~19px 空隙。"""
+    return [float(SEP_H if it.kind == "sep" else ITEM_H) for it in items]
+
+
+def menu_size(sc=1.0, n=None, items=None):
+    """(卡片宽, 卡片高, 阴影留白) —— 单位:物理像素
+
+    n 仅在 items 为 None 时作为"n 个普通项"的旧式回退(保持旧调用不炸)。"""
+    if items is not None:
+        rows = _row_hs(items)
+        total_h = sum(rows)
+    else:
+        total_h = ITEM_H * (1 if n is None else n)
     iw = int(round(W * sc))
-    ih = int(round((PAD_V * 2 + ITEM_H * n) * sc))
+    ih = int(round((PAD_V * 2 + total_h) * sc))
     pad = int(round(GAP * sc))
     return iw, ih, pad
 
 
 def item_image(items, state="normal", sc=1.0, hover_idx=-1):
     """渲染整张菜单图(含阴影留白)。返回 PIL.Image。"""
-    iw, ih, pad = menu_size(sc, len(items))
+    iw, ih, pad = menu_size(sc, items=items)
     cw, ch = iw + 2 * pad, ih + 2 * pad
     big = Image.new("RGBA", (cw * SS, ch * SS), (0, 0, 0, 0))
 
@@ -149,9 +165,12 @@ def item_image(items, state="normal", sc=1.0, hover_idx=-1):
 
     item_h = int(ITEM_H * sc * SS)
     pad_v = int(PAD_V * sc * SS)
+    y = pad * SS + pad_v                     # 逐行累加:分隔线行只占 SEP_H
     for i, it in enumerate(items):
-        iy0 = pad * SS + pad_v + i * item_h
-        iy1 = iy0 + item_h
+        rh = int(round((SEP_H if it.kind == "sep" else ITEM_H) * sc * SS))
+        iy0 = y
+        iy1 = iy0 + rh
+        y = iy1
 
         if it.kind == "sep":
             ly = (iy0 + iy1) // 2
@@ -219,7 +238,7 @@ class MenuWindow(object):
     # ---------- 几何 ----------
     def _place(self):
         """菜单出现在鼠标处;贴边自动翻转"""
-        iw, ih, pad = menu_size(self.sc, len(self.items))
+        iw, ih, pad = menu_size(self.sc, items=self.items)
         cx, cy = win32gui.GetCursorPos()
         sw = user32.GetSystemMetrics(0)
         sh = user32.GetSystemMetrics(1)
@@ -321,17 +340,19 @@ class MenuWindow(object):
         # ⚠️ 真 bug:命中空白区(卡片上下留白、分隔线行)时旧实现返回 -1,
         #    高亮被清掉 → 鼠标在卡片内滑动时高亮一闪一闪,像"只有图标有反应"。
         #    现在统一回退到**最近的菜单项**:分隔线吸附到前一项,越界吸附首/尾项。
+        # ⚠️ 行高不再统一:分隔线用 SEP_H,普通项用 ITEM_H。这里逐行累加,
+        #    否则命中区会和画出来的位置错位(点"退出桌宠"高亮到"打开设置"上)。
         if rel < 0:
             return self._nearest_item(0)
-        i = int(rel // ITEM_H)
-        # 边界抖动:正好卡在两行之间时,归到鼠标所在的那一半
-        frac = rel - i * ITEM_H
-        if frac > ITEM_H * 0.5:
-            pass  # 已在正确行
-        if 0 <= i < len(self.items) and self.items[i].kind != "sep":
-            return i
-        if 0 <= i < len(self.items):
-            return self._nearest_item(i)
+        y = 0.0
+        for i, it in enumerate(self.items):
+            rh = SEP_H if it.kind == "sep" else ITEM_H
+            if rel < y + rh:
+                # 落在第 i 行:分隔线自己的横条 → 吸附到前后最近可点项
+                if it.kind == "sep":
+                    return self._nearest_item(i)
+                return i
+            y += rh
         return self._nearest_item(len(self.items) - 1)
 
     def _nearest_item(self, i):
